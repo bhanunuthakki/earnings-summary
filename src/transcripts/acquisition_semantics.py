@@ -155,11 +155,9 @@ _PROVIDERS_BY_ENTRYPOINT = {
 }
 _SOURCE_TYPE_BY_PROVIDER: dict[TranscriptProvider, SourceType | None] = {
     TranscriptProvider.ISSUER_IR: SourceType.IR_DOC,
-    # BHA-29 on this base has no aggregator source identity. Aggregators stay
-    # unadmitted instead of being mislabeled as issuer evidence.
-    TranscriptProvider.ROIC: None,
-    TranscriptProvider.STOCKANALYSIS: None,
-    TranscriptProvider.TICKERTRENDS: None,
+    TranscriptProvider.ROIC: SourceType.IR_DOC,
+    TranscriptProvider.STOCKANALYSIS: SourceType.IR_DOC,
+    TranscriptProvider.TICKERTRENDS: SourceType.IR_DOC,
     TranscriptProvider.YOUTUBE_AUDIO: SourceType.TRANSCRIPT_AUDIO,
 }
 

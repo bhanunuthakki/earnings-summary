@@ -32,7 +32,7 @@ from quality.lifecycle_discovery import (
     scheduled_targets,
     service_entries,
 )
-from quality.reachability import ReachabilityGraph, build_graph
+from quality.reachability import ReachabilityGraph, build_graph, disposition_fingerprint
 from scheduler_manifest import TaskManifest
 
 
@@ -41,8 +41,10 @@ def _w(p: Path, t: str) -> None:
     p.write_text(t, encoding="utf-8")
 
 
-def _fp(p: str, ln: int, ev: str) -> str:
-    return hashlib.sha256(f"{p}:{ln}:{ev.strip()}".encode()).hexdigest()
+def _fp(repo: Path, p: str, ln: int) -> str:
+    fingerprint = disposition_fingerprint(p, ln, (repo / p).read_bytes())
+    assert fingerprint is not None
+    return fingerprint
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -88,15 +90,15 @@ def _refresh(repo: Path) -> None:
     for rel, schema in (
         (
             "docs/quality/reachability-dynamic-import-dispositions.json",
-            "reachability-dynamic-import-dispositions/v2",
+            "reachability-dynamic-import-dispositions/v3",
         ),
         (
             "docs/quality/reachability-getattr-dispositions.json",
-            "reachability-getattr-dispositions/v2",
+            "reachability-getattr-dispositions/v3",
         ),
         (
             "docs/quality/reachability-process-dispositions.json",
-            "reachability-process-dispositions/v2",
+            "reachability-process-dispositions/v3",
         ),
     ):
         target = repo / rel
@@ -112,7 +114,6 @@ def _refresh(repo: Path) -> None:
                 "name": prov["name"],
                 "version": prov["version"],
                 "python": prov["python"],
-                "source_sha256": prov["source_sha256"],
             },
             "input_scope": "scanner-consumed-inputs/v1",
             "scanner_sha256": first.scanner_sha256,
@@ -654,13 +655,12 @@ def test_multi_target_process_edges(tmp_path: Path) -> None:
     _line: object = unk2[0].line
     assert isinstance(_line, int)
     ln2: int = _line
-    evline = (repo / "execution/entry.py").read_text().splitlines()[ln2 - 1].strip()
     prov = dict(g2.parser)
     _w(
         repo / "docs/quality/reachability-process-dispositions.json",
         json.dumps(
             {
-                "schema_version": "reachability-process-dispositions/v2",
+                "schema_version": "reachability-process-dispositions/v3",
                 "graph_provenance": {
                     "path": ".tmp/quality/reachability-check.json",
                     "schema_version": "operational-reachability-raw/v1",
@@ -668,7 +668,6 @@ def test_multi_target_process_edges(tmp_path: Path) -> None:
                         "name": prov["name"],
                         "version": prov["version"],
                         "python": prov["python"],
-                        "source_sha256": prov["source_sha256"],
                     },
                     "input_scope": "scanner-consumed-inputs/v1",
                     "scanner_sha256": g2.scanner_sha256,
@@ -676,8 +675,7 @@ def test_multi_target_process_edges(tmp_path: Path) -> None:
                 "edges": [
                     {
                         "path": "execution/entry.py",
-                        "line": ln2,
-                        "fingerprint": _fp("execution/entry.py", ln2, evline),
+                        "fingerprint": _fp(repo, "execution/entry.py", ln2),
                         "disposition": "internal_python_target",
                         "targets": ["src/child_a.py", "src/child_b.py"],
                         "evidence": "e",

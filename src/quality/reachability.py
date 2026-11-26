@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from xml.etree.ElementTree import ParseError
@@ -80,12 +81,12 @@ RAW_SCHEMA = "operational-reachability-raw/v1"
 DYNAMIC_MANIFEST_PATH = "docs/quality/reachability-dynamic-import-dispositions.json"
 GETATTR_MANIFEST_PATH = "docs/quality/reachability-getattr-dispositions.json"
 PROCESS_MANIFEST_PATH = "docs/quality/reachability-process-dispositions.json"
-DYNAMIC_SCHEMA = Literal["reachability-dynamic-import-dispositions/v2"]
-GETATTR_SCHEMA = Literal["reachability-getattr-dispositions/v2"]
-PROCESS_SCHEMA = Literal["reachability-process-dispositions/v2"]
-DYNAMIC_SCHEMA_VALUE = "reachability-dynamic-import-dispositions/v2"
-GETATTR_SCHEMA_VALUE = "reachability-getattr-dispositions/v2"
-PROCESS_SCHEMA_VALUE = "reachability-process-dispositions/v2"
+DYNAMIC_SCHEMA = Literal["reachability-dynamic-import-dispositions/v3"]
+GETATTR_SCHEMA = Literal["reachability-getattr-dispositions/v3"]
+PROCESS_SCHEMA = Literal["reachability-process-dispositions/v3"]
+DYNAMIC_SCHEMA_VALUE = "reachability-dynamic-import-dispositions/v3"
+GETATTR_SCHEMA_VALUE = "reachability-getattr-dispositions/v3"
+PROCESS_SCHEMA_VALUE = "reachability-process-dispositions/v3"
 _DISPOSITION_MANIFESTS: tuple[tuple[str, EdgeKind, str], ...] = (
     (DYNAMIC_MANIFEST_PATH, "dynamic_import", DYNAMIC_SCHEMA_VALUE),
     (GETATTR_MANIFEST_PATH, "getattr", GETATTR_SCHEMA_VALUE),
@@ -136,7 +137,6 @@ class DispositionParserProvenance(BaseModel):
     name: Literal["ast+xml+literal-scanner"]
     version: Literal["1.3.0"]
     python: Literal[">=3.11"]
-    source_sha256: str
 
 
 class DispositionGraphProvenance(BaseModel):
@@ -151,7 +151,6 @@ class DispositionGraphProvenance(BaseModel):
 class DispositionEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     path: str
-    line: int
     fingerprint: str
     disposition: Disposition
     targets: tuple[str, ...] = ()
@@ -162,9 +161,9 @@ class DispositionEntry(BaseModel):
 class DispositionManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_version: Literal[
-        "reachability-dynamic-import-dispositions/v2",
-        "reachability-getattr-dispositions/v2",
-        "reachability-process-dispositions/v2",
+        "reachability-dynamic-import-dispositions/v3",
+        "reachability-getattr-dispositions/v3",
+        "reachability-process-dispositions/v3",
     ]
     graph_provenance: DispositionGraphProvenance
     entries: tuple[DispositionEntry, ...] = ()
@@ -490,52 +489,111 @@ def _canonical_repo_rel(value: str) -> str | None:
     return value
 
 
-def _line_fingerprint(
-    root: Path, path: str, line: int, input_bytes: dict[str, bytes]
-) -> str | None:
-    if line < 1:
-        return None
-    if _canonical_repo_rel(path) is None:
-        return None
-    if path not in input_bytes:
-        return None
-    safe: Path | None = None
-    try:
-        safe = _safe_repo_path(root, path)
-    except ReachabilityCollectionError:
-        return None
-    try:
-        resolved = safe.resolve(strict=False)
-    except (OSError, RuntimeError):
-        return None
-    try:
-        root_resolved = root.resolve()
-    except (OSError, RuntimeError):
-        return None
-    if not resolved.is_relative_to(root_resolved):
-        return None
-    if resolved.is_symlink():
-        return None
-    if resolved.relative_to(root_resolved).as_posix() != path:
-        return None
-    try:
-        if not resolved.is_file():
-            return None
-    except OSError:
-        return None
-    raw = input_bytes[path]
+# Disposition fingerprints bind a review to the reviewed code, not to its
+# position or to the rest of the repository. The hash covers the edge's source
+# path, its enclosing def/class qualified name, the dedented text of that whole
+# scope, the edge's own line text, and its ordinal among identical lines in the
+# scope. Editing the reviewed line or anything else in its enclosing function
+# therefore invalidates the review; inserting code elsewhere does not.
+FINGERPRINT_SCHEME = "reachability-disposition-fingerprint/v1"
+_ScopeNode = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+
+
+def _decode_source(raw: bytes) -> str | None:
     try:
         if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-            text = raw.decode("utf-16")
-        else:
-            text = raw.decode("utf-8-sig")
+            return raw.decode("utf-16")
+        return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
+        return None
+
+
+def _enclosing_scope(tree: ast.AST | None, line: int) -> tuple[str, int, int] | None:
+    """Return the innermost def/class around ``line`` as (qualname, first, last)."""
+    if tree is None:
+        return None
+    names: list[str] = []
+    found: tuple[str, int, int] | None = None
+    node: ast.AST = tree
+    while True:
+        inner: tuple[_ScopeNode, int, int] | None = None
+        # Breadth-first order reaches the shallowest containing scope first.
+        for candidate in ast.walk(node):
+            if candidate is node or not isinstance(candidate, _ScopeNode):
+                continue
+            first = min([d.lineno for d in candidate.decorator_list] + [candidate.lineno])
+            last = candidate.end_lineno or candidate.lineno
+            if first <= line <= last:
+                inner = (candidate, first, last)
+                break
+        if inner is None:
+            return found
+        scope_node, first, last = inner
+        names.append(scope_node.name)
+        found = (".".join(names), first, last)
+        node = scope_node
+
+
+def disposition_fingerprint(
+    path: str, line: int, raw: bytes, tree: ast.AST | None = None
+) -> str | None:
+    """Return the position-independent review fingerprint for an edge at ``line``."""
+    if line < 1:
+        return None
+    text = _decode_source(raw)
+    if text is None:
         return None
     lines = text.splitlines()
     if line > len(lines):
         return None
-    payload = f"{path}:{line}:{lines[line - 1].strip()}".encode()
-    return hashlib.sha256(payload).hexdigest()
+    if tree is None and path.endswith(".py"):
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            tree = None
+    target = lines[line - 1].strip()
+    scope = _enclosing_scope(tree, line)
+    if scope is None:
+        qualname, first, last = "<module>", line, line
+    else:
+        qualname, first, last = scope
+    scope_text = textwrap.dedent(
+        "\n".join(item.rstrip() for item in lines[first - 1 : last] if item.strip())
+    )
+    occurrence = sum(1 for item in lines[first - 1 : line] if item.strip() == target)
+    payload = json.dumps(
+        [FINGERPRINT_SCHEME, path, qualname, occurrence, target, scope_text],
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _edge_fingerprints(
+    edges: list[GraphEdge], input_bytes: dict[str, bytes]
+) -> dict[tuple[str, int, str], str]:
+    """Fingerprint every unknown edge that carries a source line."""
+    trees: dict[str, ast.AST | None] = {}
+    result: dict[tuple[str, int, str], str] = {}
+    for edge in edges:
+        if not edge.unknown or edge.line is None or edge.source not in input_bytes:
+            continue
+        key = (edge.source, edge.line, edge.kind)
+        if key in result:
+            continue
+        raw = input_bytes[edge.source]
+        if edge.source not in trees:
+            text = _decode_source(raw)
+            tree: ast.AST | None = None
+            if text is not None and edge.source.endswith(".py"):
+                try:
+                    tree = ast.parse(text)
+                except SyntaxError:
+                    tree = None
+            trees[edge.source] = tree
+        fingerprint = disposition_fingerprint(edge.source, edge.line, raw, trees[edge.source])
+        if fingerprint is not None:
+            result[key] = fingerprint
+    return result
 
 
 def _repo_file_target(root: Path, value: str, input_bytes: dict[str, bytes]) -> str | None:
@@ -594,8 +652,14 @@ def _apply_reviewed_dispositions(
     input_bytes: dict[str, bytes],
     tracked: set[str],
 ) -> tuple[list[GraphEdge], list[Diagnostic], dict[str, str]]:
-    manifests: dict[tuple[str, int, str], tuple[DispositionEntry, str, tuple[str, ...]]] = {}
-    duplicate_keys: set[tuple[str, int, str]] = set()
+    # Keyed by (path, edge kind, fingerprint): line numbers are not part of the key.
+    manifests: dict[tuple[str, str, str], tuple[DispositionEntry, str, tuple[str, ...]]] = {}
+    duplicate_keys: set[tuple[str, str, str]] = set()
+    edge_fingerprints = _edge_fingerprints(edges, input_bytes)
+    live_keys = {
+        (source, kind, fingerprint)
+        for (source, _line, kind), fingerprint in edge_fingerprints.items()
+    }
     diagnostics: list[Diagnostic] = []
     hashes: dict[str, str] = {}
     for manifest_rel, edge_kind, expected_schema in _DISPOSITION_MANIFESTS:
@@ -668,7 +732,6 @@ def _apply_reviewed_dispositions(
             and prov.parser.name == expected_parser.get("name")
             and prov.parser.version == expected_parser.get("version")
             and prov.parser.python == expected_parser.get("python")
-            and prov.parser.source_sha256 == expected_parser.get("source_sha256")
             and prov.scanner_sha256 == scanner_sha256
         )
         if not parser_ok:
@@ -679,23 +742,26 @@ def _apply_reviewed_dispositions(
             )
             continue
         for entry in (*manifest.entries, *manifest.edges):
-            key = (entry.path, entry.line, edge_kind)
+            key = (entry.path, edge_kind, entry.fingerprint)
+            label = f"{edge_kind} fingerprint {entry.fingerprint[:12]}"
             reviewed_targets = _reviewed_targets(root, entry, input_bytes)
             if reviewed_targets is None:
                 diagnostics.append(
                     Diagnostic(
                         path=entry.path,
-                        message=f"reachability {entry.disposition} disposition requires exact existing repository file targets at line {entry.line}",
+                        message=f"reachability {entry.disposition} disposition requires exact existing repository file targets for {label}",
                         kind="unknown",
                     )
                 )
                 continue
-            actual = _line_fingerprint(root, entry.path, entry.line, input_bytes)
-            if actual is None or actual != entry.fingerprint:
+            if key not in live_keys:
                 diagnostics.append(
                     Diagnostic(
                         path=entry.path,
-                        message=f"stale reachability disposition at line {entry.line} from {manifest_rel}",
+                        message=(
+                            f"stale reachability disposition: no unknown {label} edge "
+                            f"from {manifest_rel}; the reviewed code changed"
+                        ),
                         kind="unknown",
                     )
                 )
@@ -704,10 +770,7 @@ def _apply_reviewed_dispositions(
                 diagnostics.append(
                     Diagnostic(
                         path=entry.path,
-                        message=(
-                            f"duplicate reachability disposition at line {entry.line} "
-                            f"for {edge_kind}"
-                        ),
+                        message=f"duplicate reachability disposition for {label}",
                         kind="unknown",
                     )
                 )
@@ -718,27 +781,23 @@ def _apply_reviewed_dispositions(
                 diagnostics.append(
                     Diagnostic(
                         path=entry.path,
-                        message=f"duplicate reachability disposition at line {entry.line} for {edge_kind}",
+                        message=f"duplicate reachability disposition for {label}",
                         kind="unknown",
                     )
                 )
                 continue
             manifests[key] = (entry, manifest_rel, reviewed_targets)
-    raw_keys = {(e.source, e.line, e.kind) for e in edges if e.unknown and e.line is not None}
-    for key, (_entry, manifest_rel, _targets) in sorted(manifests.items()):
-        if key not in raw_keys:
-            path, line, edge_kind = key
-            diagnostics.append(
-                Diagnostic(
-                    path=path,
-                    message=f"reachability disposition no longer matches an unknown {edge_kind} edge at line {line} from {manifest_rel}",
-                    kind="unknown",
-                )
-            )
     reviewed: list[GraphEdge] = []
     for edge in edges:
+        fingerprint = (
+            edge_fingerprints.get((edge.source, edge.line, edge.kind))
+            if edge.line is not None
+            else None
+        )
         matched = (
-            manifests.get((edge.source, edge.line, edge.kind)) if edge.line is not None else None
+            manifests.get((edge.source, edge.kind, fingerprint))
+            if fingerprint is not None
+            else None
         )
         if not edge.unknown or matched is None or matched[0].disposition == "unresolved":
             reviewed.append(edge)
@@ -1350,12 +1409,35 @@ def production_unknown_edges(graph: ReachabilityGraph) -> tuple[GraphEdge, ...]:
     return tuple(edge for edge in graph.unknown_edges if edge.source in reachable)
 
 
+def unknown_edge_fingerprints(repo_root: str | Path) -> list[dict[str, object]]:
+    """List every unknown edge with the fingerprint a disposition must carry."""
+    root = Path(repo_root).resolve()
+    graph = build_graph(root)
+    input_bytes: dict[str, bytes] = {}
+    for edge in graph.unknown_edges:
+        if edge.line is not None and edge.source not in input_bytes:
+            input_bytes[edge.source] = _safe_repo_path(root, edge.source).read_bytes()
+    fingerprints = _edge_fingerprints(list(graph.unknown_edges), input_bytes)
+    return [
+        {"path": source, "line": line, "kind": kind, "fingerprint": fingerprint}
+        for (source, line, kind), fingerprint in sorted(fingerprints.items())
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, help="Write JSON here instead of stdout")
+    parser.add_argument(
+        "--fingerprints",
+        action="store_true",
+        help="Print the disposition fingerprint of every unknown edge and exit",
+    )
     args = parser.parse_args(argv)
     try:
+        if args.fingerprints:
+            sys.stdout.write(json.dumps(unknown_edge_fingerprints(args.repo_root), indent=2) + "\n")
+            return 0
         result = build_graph(args.repo_root)
         payload = result.model_dump_json(indent=2) + "\n"
         if args.output:

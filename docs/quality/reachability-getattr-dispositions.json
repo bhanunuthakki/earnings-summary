@@ -3,8 +3,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only fields declared in the checked-in _SOTP_SPEC dashboard spec.",
-      "fingerprint": "05409fe3a9075c8e8b0894947002d3778ccb48009228f538bed503af4aec8c3d",
-      "line": 450,
+      "fingerprint": "2c47c3b39cfaa4873ca09b98ef8b673ad98eb4cef8874dcdd60745c701c0e3cd",
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -13,8 +12,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync writes only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "0f70bc632a2da07d6bfd5ea89d8305aee28bb02c2e56128ec74be2b39077d824",
-      "line": 613,
+      "fingerprint": "c4e221f53b069f08a722555d03b377154c4a588c52c782e0e347d8a75e231d42",
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -23,8 +21,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync reads only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "387b516b46c8361491c4de10e8f8d632ea8d6059d22787b7c9d8836afe2aa0cc",
-      "line": 615,
+      "fingerprint": "abf0d254e52823104b406d04efe3356b23bb55df34faa78e0be55af96220d525",
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -33,8 +30,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Dashboard build reads only _SOTP_SPEC fields via getattr.",
-      "fingerprint": "861fcbdff89be0948f095f68be08e900f1fa2bdad951e38057b6d4051691da79",
-      "line": 744,
+      "fingerprint": "15402971640d7c16e1aec64b2f9103e453a407357447353a21be0d2693ae7223",
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -43,8 +39,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "8737c35f6aa9eecf17f2fd4d3c0cc7cad73e0bfdd9c1ac9dcb4228144d43acc3",
-      "line": 368,
+      "fingerprint": "3f599623d0af7e7d304de237d672f1309dd96ace7f8bcda265511bd675273201",
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +50,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "b87ffe526991899bfc3cc9102cea5943a0d0783595fc95f7025efca79c9473ad",
-      "line": 370,
+      "fingerprint": "58d0f1bcb1bb0d03f6d23b20d986e0a4683493381e15bc2ec976fcd7296de1e0",
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +61,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "f36ea4729875acc0ac04dd4769bffecea5821349f6ea06898e70727c8078a2b1",
-      "line": 372,
+      "fingerprint": "3dcd2bc45a3e73a4d1090f86b41df951380381ca86c0e1d9eacc1f9137119017",
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +72,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "e385cc08b953d5221bb06a939e0eb2ecaebbfca7a23a03968b0046d6e8162c9c",
-      "line": 374,
+      "fingerprint": "c0a99746b12441039237b17ef041cdbcbfcc0a797243fa5470947d6feb71f2bc",
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -91,8 +83,7 @@
     {
       "disposition": "schema_field",
       "evidence": "_section_status reads only the literal report-spec section field tuple declared in the function.",
-      "fingerprint": "852469d4f61487b19667d32e3494fc0e3ae3d4375320216fb6c16d5fd2885fa7",
-      "line": 248,
+      "fingerprint": "c4337dd35cc0b2375965e75047c803e19b5060c6fecde761460ae8fd652b7102",
       "path": "execution/build_offline_artifact.py",
       "targets": [
         "spec"
@@ -101,8 +92,7 @@
     {
       "disposition": "external_adapter",
       "evidence": "The local redacted-failure helper resolves the default error level on the Flask application logger; its sole caller uses that default.",
-      "fingerprint": "61e95d94900dfbbbc7e848ce917b8408381932f0c3d74be22622545c61a148a1",
-      "line": 201,
+      "fingerprint": "1c08c90451ee61203fc2bc10f38adb8df9a54010b982a5c308f6ece90e9fbce2",
       "path": "execution/comments_server_context.py",
       "targets": [
         "logging"
@@ -111,8 +101,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr validates only fields in the function-local positive_fields tuple before argparse range checks.",
-      "fingerprint": "7077951d6011157dad7870a8e4a37a50418ee1f489bceb96264947f026b6c0f8",
-      "line": 1383,
+      "fingerprint": "2862cfd1f13da23834d8a59d5b08fcdcd72632e53f8557f328762dabb524440b",
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "positive_fields"
@@ -121,8 +110,7 @@
     {
       "disposition": "external_adapter",
       "evidence": "getattr reads only _FRAME_TABLES-mapped yfinance Ticker attributes.",
-      "fingerprint": "0ada94d09f8fd0f690a1d496e48946c319ddd0474145179199a4fbb69e51b66f",
-      "line": 132,
+      "fingerprint": "6b15267bfb2c3c574f4e5d8f106f2b78dca77bce3a24e6d87c20279a39c3683a",
       "path": "execution/fetch_yf_estimates.py",
       "targets": [
         "yfinance"
@@ -131,8 +119,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Document path extraction permits only the filepath and uri tuple.",
-      "fingerprint": "aeca96fb1b83cf5c474945c4d0fae12048b520d7bc07c528367164c7255cb649",
-      "line": 510,
+      "fingerprint": "7268de7bb8337714d3beb2f234fb3a8ae0753274c26c29151d8bc77abe96b126",
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "filepath",
@@ -142,8 +129,7 @@
     {
       "disposition": "external_adapter",
       "evidence": "getattr crosses only the Arelle, lxml, and XBRL relationship adapter boundaries.",
-      "fingerprint": "c7e525ecee9b374759328c735c2586bfbb8ac6aafa5623bee2a1ac060150c5bf",
-      "line": 964,
+      "fingerprint": "1ffb92e5809289ca0fae376ae93d812910140c40ccc41f0276667ffca19c225f",
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle",
@@ -153,8 +139,7 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "2c66d88e41d6de7c9df9b8639d0088273452911dd2fb748af07a18cd5ef98290",
-      "line": 785,
+      "fingerprint": "895da4abcd5d1e900fe5944311c331f598875a2e60383489ca50e9bdc8c2623b",
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -163,8 +148,7 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "deca59aa469ca7308270ac22e0613ecc6f8f4d1f3b3421116928f4785881f129",
-      "line": 789,
+      "fingerprint": "e6a2bd3f4ce7e5d1754451fd96709dbcb7a17b3b25bc73c335deb18c8995b016",
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -173,8 +157,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only StageSpec.skip_flags from the checked-in manifest.",
-      "fingerprint": "02abaf8d08c86211a4a28b51390b046557e7cf8bc6d6c0967c36ef370efb5c44",
-      "line": 192,
+      "fingerprint": "c285a22c0a46be04beaf770f092bec4d0c1ce3e69dcbc7495be086b42723592f",
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "StageSpec.skip_flags"
@@ -183,8 +166,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only line_item_spec provider fields.",
-      "fingerprint": "27c20b90bc592025a43ab28dcec4880af3ee5636c7d4043a90ede08e3cff2cf7",
-      "line": 82,
+      "fingerprint": "4c22a45da12831d0211c7bff33f1e7d4e4811a7dde3ab4ce450753d427868106",
       "path": "src/compute/_common.py",
       "targets": [
         "line_item_spec"
@@ -193,8 +175,7 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "aad5dd2563f2961af287cbe742c2c8e13959429ba12177d65566cd648c5bb656",
-      "line": 96,
+      "fingerprint": "d6f290a4c334a1815af3816a837c0ca301c3b98aad5363cf5bf04ce06753bac7",
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "kernel32"
@@ -203,8 +184,7 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "7d8adb78f26cd948ecb5cdf0e1e6be373384ae4d635c92cf43215d4c797c8cfb",
-      "line": 100,
+      "fingerprint": "35232ead64d62ec96e282710bab28afdb442290f31d0228ec248a97ef8a4defe",
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "kernel32"
@@ -213,8 +193,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "_verified_metric_expression iterates only the literal numerator, denominator, input, left, right field tuple on the frozen, extra-forbid MetricExpression schema. Each child is recursively rebound through its source-file-bound KPI reference. No source data controls the attribute name.",
-      "fingerprint": "c45d8c1f2a07f5b866f0bf7b33700d10bf0e77be8bb46467020ff18df52c0b15",
-      "line": 1155,
+      "fingerprint": "0ede7b0088cadfb98dad5cbb9fc51de4e5e587c97720b11c83055a89b98da1ee",
       "path": "src/compute/thesis_evaluator.py",
       "targets": [
         "numerator",
@@ -227,8 +206,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _BASELINE_SCALAR_FIELDS attributes.",
-      "fingerprint": "8094493b39f51023e7ef74f9a416db008bb10ce9d06424ff1c08b17d10a3f771",
-      "line": 259,
+      "fingerprint": "3858f026b4c4d04fc55e83e2fc4b6d7fc0c04fed038186b26e108e2fb0e78721",
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
         "_BASELINE_SCALAR_FIELDS"
@@ -237,8 +215,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "build_assumption_rows accesses only growth_near, growth_term, margin_near, margin_term, exit_multiple and terminal_g from the checked-in _SCEN_LEVER_LABELS tuple. Bull/Bear input and seed objects are selected by the adjacent literal scenario tuple. No data-selected attribute or executable target. This clarifies object labels versus the actual closed attribute registry.",
-      "fingerprint": "54759f35844d9097c973e11719833241b75d5614032c5693eec069ccbc5984d8",
-      "line": 532,
+      "fingerprint": "57b6835bf4e92c8447576a85d6a9f3368a0cc72a3e580480df91c7594bc299d9",
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
         "_SCEN_LEVER_LABELS"
@@ -247,8 +224,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "build_assumption_rows accesses only growth_near, growth_term, margin_near, margin_term, exit_multiple and terminal_g from the checked-in _SCEN_LEVER_LABELS tuple. Bull/Bear input and seed objects are selected by the adjacent literal scenario tuple. No data-selected attribute or executable target. This clarifies object labels versus the actual closed attribute registry.",
-      "fingerprint": "c41c220b8f97127c5bcdbc32adc5f1d4a5cc38b255d2848cae745193ea93f195",
-      "line": 533,
+      "fingerprint": "ef297fa31a65ec9e6a88ea9ee0aa1f4b5adbea8f8d7de0c5777bf5a13f9d734f",
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
         "_SCEN_LEVER_LABELS"
@@ -257,8 +233,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
-      "fingerprint": "c9ec0a6ce1ceec2014cfb01b1fde929d24dc579b55c67741379781989b78a674",
-      "line": 182,
+      "fingerprint": "c83918f2b0a87fed9cbd0f1d49adfbee6bd2cb5c0376e28e1962d728102085af",
       "path": "src/dcf/meli_workbook.py",
       "targets": [
         "comm_rev0",
@@ -297,8 +272,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Reported-anchor comparisons use the fixed five-field tuple, adding only financing_other_expenses_reserve for the explicit financing recipe. Both operands are Assum records; no callable or dispatch target is selected.",
-      "fingerprint": "b1b58c8a76e17b916d4e208d7693fd80183830e684d36a2c58779886987709bb",
-      "line": 192,
+      "fingerprint": "22d9623850163f371122089c5b29ee93bb91ec94ecf5092a7adc405fe6c092cf",
       "path": "src/dcf/meli_workbook.py",
       "targets": [
         "comm_rev0",
@@ -312,8 +286,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
-      "fingerprint": "0c3c39eae53c86eb2da9c752eda45150ff9430f055850909988883ec834a4dda",
-      "line": 238,
+      "fingerprint": "dc8213b48a7cc51bc2aecc16cce4da5c6bd269696a75510a9e30f0cd0b56c37d",
       "path": "src/dcf/meli_workbook.py",
       "targets": [
         "comm_rev0",
@@ -352,8 +325,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
-      "fingerprint": "6ae1dac0c5c1e0638fd6f9b3c9751d66052f4a81cccf7f984748ad554c5a703a",
-      "line": 247,
+      "fingerprint": "6d0e703309a54d12058a6a7009f1a2fda1a6bb691a6f6506a6dadb666e355064",
       "path": "src/dcf/meli_workbook.py",
       "targets": [
         "comm_rev0",
@@ -392,8 +364,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Expected workbook Valuation values read only the literal row/attribute tuple on the typed dcf.meli_model.Mirror result. The attributes are numeric model outputs, not callable or module targets.",
-      "fingerprint": "7cff7d23c760e96d41dd8b730ef58a3af0b232591a08b550d6ac6cf620f3b88e",
-      "line": 444,
+      "fingerprint": "729c036f0b09e9d3103411000cdbd9469d38bd578d465aa57f9ec6da2cc622b0",
       "path": "src/dcf/meli_workbook.py",
       "targets": [
         "pv_op_fcff",
@@ -413,8 +384,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Expected workbook Model values read only the literal row/attribute tuple on dcf.meli_model.Row members of Mirror.rows. These are numeric annual model outputs, not callable or module targets.",
-      "fingerprint": "be98d7b65f94e1268c9b593706914a32f805de3af462dde77e873b552ee9169d",
-      "line": 488,
+      "fingerprint": "93badd97dfd9d5806f83b1d21e1b3f65a9d84fdd8aca73897d3f9e7d0d5dcb7a",
       "path": "src/dcf/meli_workbook.py",
       "targets": [
         "comm_rev",
@@ -435,8 +405,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _SCALAR_ROW_ATTR dashboard scalar attributes.",
-      "fingerprint": "ffa30a87932374b1c3a2c2740fe3e87bdcc2a2520b2ffad5e53cd1a24ba93921",
-      "line": 1496,
+      "fingerprint": "f99258da8e5260c72439432aa88875cbe6ab05381270b40cf24a0e56ffc6399f",
       "path": "src/dcf/redesign.py",
       "targets": [
         "_SCALAR_ROW_ATTR"
@@ -445,8 +414,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Serialization reads only the checked-in SCALARS literal set on the typed RedesignInputs record and converts each value to float. No callable, module or command is selected.",
-      "fingerprint": "bc3708bfce05ace89a829459b146d1a8ac33c28d90948c11fb166ae49910956f",
-      "line": 263,
+      "fingerprint": "5ca1b98e0a08a4fe2a954f815524b4e2d9155949b13b34c611e38e4d1ff0205c",
       "path": "src/dcf/redesign_inputs.py",
       "targets": [
         "SCALARS"
@@ -455,8 +423,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "The fixed bull/bear loop reads only the declared ScenarioDeltas records on RedesignInputs. Source data cannot choose the attribute name or an execution target.",
-      "fingerprint": "d4125bb0ebcbe3415242117e9b9276988afe0d0993a70337161242e1a2b542c6",
-      "line": 282,
+      "fingerprint": "1c5733ddd4d8d08ac3229fe390f97e411e2283ecbd668078ac98fc31ed1e5b13",
       "path": "src/dcf/redesign_inputs.py",
       "targets": [
         "bull_deltas",
@@ -466,8 +433,7 @@
     {
       "disposition": "schema_field",
       "evidence": "DELTA_KEYS comes only from dataclasses.fields(redesign.ScenarioDeltas). Serialization converts each declared scenario field to float; no callable, module or command is selected.",
-      "fingerprint": "e9ba0791913fa48f6491c15d1a8b2f04dd2a3a6882cb24eed347df7beae65806",
-      "line": 283,
+      "fingerprint": "b14b0d08487c343e2f22555f67699b79ed4f776477f472cd87c14b0d2c5a48a4",
       "path": "src/dcf/redesign_inputs.py",
       "targets": [
         "DELTA_KEYS"
@@ -476,8 +442,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Decimal loop accesses only the six persisted earnings-surprise fields.",
-      "fingerprint": "1c8acfb60ced1db04ac029ba9a1851d8a289982a0f5e70561b48ff4c913aa4ce",
-      "line": 141,
+      "fingerprint": "59364d4fe96ad752b0c4140c64c44dbdc78fba68241b46d0c4c381ad26282337",
       "path": "src/earnings_surprise_store.py",
       "targets": [
         "eps_estimate",
@@ -491,8 +456,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Count loop accesses only the two analyst-count fields.",
-      "fingerprint": "9ec8c47cd109ea767a3451ccae091f532baacd87cb7a66ff30a329f375a03776",
-      "line": 161,
+      "fingerprint": "89e5bfecdaabced8ed572100c0546a74d7a2a86ffde57d1aefcc6d19dafeecba",
       "path": "src/earnings_surprise_store.py",
       "targets": [
         "num_analysts_eps",
@@ -502,8 +466,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Persistence tuple reads only the six persisted decimal fields.",
-      "fingerprint": "75764050e21ed82883d6904396315c8cb747692060cc121e069a590e902a3b3f",
-      "line": 251,
+      "fingerprint": "dd25a5621f1a83df60567853f7174a6c430c65dc99965f1b1fd04b1c406275e5",
       "path": "src/earnings_surprise_store.py",
       "targets": [
         "eps_estimate",
@@ -517,8 +480,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only validated FmpAnalystEstimateRecord metric fields.",
-      "fingerprint": "db6f9c628420340af4b2f27aa1e74790ddc078c96c0d172f05cf46fbdd8a304d",
-      "line": 172,
+      "fingerprint": "d3ecd9dfef09216f566191d546dd49ff3c0bcaa31889e0e7b7972d322ca908c1",
       "path": "src/estimates_archive.py",
       "targets": [
         "FmpAnalystEstimateRecord"
@@ -527,8 +489,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Capture iterates only the checked-in LABEL_FIELDS tuple on the typed EtfProfile model.",
-      "fingerprint": "6ba2c7c119916ee144010f9a479be287081ffda254638a961c782735269e2f1c",
-      "line": 31,
+      "fingerprint": "5f4864207ce7a5b83ff2652633e57028acdce9e83a643f2d90e765afa07315d6",
       "path": "src/etf_sources/profile_evidence.py",
       "targets": [
         "asset_class",
@@ -541,8 +502,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Admission rejects keys outside LABEL_FIELDS before reading a corresponding typed EtfProfile value.",
-      "fingerprint": "831bf19ac7352675f6ea64de2337e624194512038a88cdbd669ae15ef15297fa",
-      "line": 56,
+      "fingerprint": "fbda6e27fdd8b8d6f7822977185a4bfaf517328b3369a366dbd3d14ad5c4641f",
       "path": "src/etf_sources/profile_evidence.py",
       "targets": [
         "asset_class",
@@ -555,8 +515,7 @@
     {
       "disposition": "internal_python_target",
       "evidence": "EDGAR CIK fallback resolves the fixed legacy _lookup_cik_for_ticker helper through a typed compatibility boundary.",
-      "fingerprint": "e270f385238c606c31ad4b50ab7a4ae952674ea53aa36b3be94b85d160457dec",
-      "line": 168,
+      "fingerprint": "928650fadc13ea96569af0ef823d049cdf621f4cef937434317936649cec7494",
       "path": "src/filings/edgar_fetch.py",
       "targets": [
         "src/insider_transactions.py"
@@ -565,8 +524,7 @@
     {
       "disposition": "internal_python_target",
       "evidence": "EDGAR document fetch resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
-      "fingerprint": "5ee12bdea8e1a6c3c4b2ed189abb74e190d9a55e840ab2b8de45c826e6f0272d",
-      "line": 295,
+      "fingerprint": "3ba9ca6a2490c4d075e06c2d2f6369775a4f8f03b9a90f68282662a291ca81d4",
       "path": "src/filings/edgar_fetch.py",
       "targets": [
         "src/filing_text_fetcher.py"
@@ -575,8 +533,7 @@
     {
       "disposition": "internal_python_target",
       "evidence": "EDGAR section splitting resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
-      "fingerprint": "56b7c5d0b5c8c5dccd085c787b98ed5eb791c2200561e33c80d76d614e2123dd",
-      "line": 49,
+      "fingerprint": "76691edf729f2796ecebd3f8cc0f713980b991b6bd9b282627f8e27f906d7499",
       "path": "src/filings/edgar_sections.py",
       "targets": [
         "src/filing_text_fetcher.py"
@@ -585,8 +542,7 @@
     {
       "disposition": "external_adapter",
       "evidence": "Windows-only ACL code resolves ctypes.WinDLL explicitly after the os.name guard.",
-      "fingerprint": "395ef4759a4ecbfb7d5e3f47d8a9f9aea5738353526e8a665d8d9c08c4a13ad9",
-      "line": 102,
+      "fingerprint": "409b3800dd7957644b997751b182fabf473808318f953e145396901870ab1840",
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "ctypes.WinDLL"
@@ -595,8 +551,7 @@
     {
       "disposition": "external_adapter",
       "evidence": "Windows-only ACL verification resolves ctypes.get_last_error through a typed platform boundary.",
-      "fingerprint": "e39ed3c0eb3e5dc5e6567c8ea3089643942e6523fc8ebf4772ad4092334e883e",
-      "line": 109,
+      "fingerprint": "f5b651e88088e332c787673c6572e6f37c4c52c4fb064231b7736aed4ee95622",
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "ctypes.get_last_error"
@@ -605,8 +560,7 @@
     {
       "disposition": "external_adapter",
       "evidence": "Windows-only directory DACL verification resolves the fixed ctypes.WinDLL adapter for advapi32; it does not change caller impersonation or privileges.",
-      "fingerprint": "e817c3ba750963fdb6c7141b2871fc1d05b97f5aea61d2ef3a38f7a24d4710ef",
-      "line": 116,
+      "fingerprint": "31bc76835fb428b4a67713c1eb9d098992db9fe4fcdcca897a9a8ef85ead9694",
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "ctypes.WinDLL"
@@ -615,8 +569,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr checks only the four core wealth total fields.",
-      "fingerprint": "bdd48cee993ecae3ff299f51ac59310a04da993e0b277ac2f587d8b68e178790",
-      "line": 102,
+      "fingerprint": "2d38c42d8124aacd75c05b61bad570bc37c85cf2423ea57de4611deb224dce79",
       "path": "src/integrations/wealth_context.py",
       "targets": [
         "net_worth_total",
@@ -628,8 +581,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _kind_to_date_attr event date attributes.",
-      "fingerprint": "8099a1781f6cb586851584196c30cd522d2980afab0f410f46c86732107c6d29",
-      "line": 180,
+      "fingerprint": "5fd452ec311da794740f05d3efe12c078ecc4820fd3d6d405ded99e223ad281f",
       "path": "src/integrations/wealthplan_capacity.py",
       "targets": [
         "_kind_to_date_attr"
@@ -638,8 +590,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _OPTIONAL_COLUMNS ledger fields.",
-      "fingerprint": "7854f56a6a4fb6905854be2fe547fb68a8369b129ec7d88975141a74117c6478",
-      "line": 342,
+      "fingerprint": "12a975216dfaa456e2c05b2a89397a3165debf14a78eb4f9f9775eb3d030d8aa",
       "path": "src/llm_call_ledger.py",
       "targets": [
         "_OPTIONAL_COLUMNS"
@@ -648,8 +599,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "table_names_present checks only the five closed estimate tables.",
-      "fingerprint": "be7e7771013e86696570dc42bd741a8d78b6fa08ef25bc8146233cf75aa475a5",
-      "line": 146,
+      "fingerprint": "06159d2a0751ad08f36467c9314a975f7753dce5e526d5982c7cf10a80bc494c",
       "path": "src/models/yf_payloads.py",
       "targets": [
         "earnings_estimate",
@@ -662,8 +612,7 @@
     {
       "disposition": "schema_field",
       "evidence": "_magnitude_guard_violation compares only this literal tuple of KpiSemanticContext data fields between admitted contexts. The returned attributes are compared for equality; they are not invoked or used to select code.",
-      "fingerprint": "cacd0beb574e2b17313610fadc8fc7447517941cbc21d4d073889c4010012f84",
-      "line": 441,
+      "fingerprint": "cc68a8938e567765e43f09702dd206f160b029d17ce4d624d0840e22c4e20de3",
       "path": "src/pipeline/kpi_persistence.py",
       "targets": [
         "accounting_basis",
@@ -676,8 +625,7 @@
     {
       "disposition": "schema_field",
       "evidence": "The renderer calls this helper only while iterating the checked-in _COMPARE_METRIC_ROWS field tuple.",
-      "fingerprint": "03e79c5f95dff6223b6cd57e105e5ce089007caad7ec6c2959b97510f1d12a96",
-      "line": 1956,
+      "fingerprint": "886da1e902f660b7d2a0fb6d8c50a75e3c6daa17b208f12866b1be6711268bf9",
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -686,8 +634,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "The verifier compares a fixed field-name tuple between schema-validated TranscriptAuditEvaluation and TranscriptAuditQualification models.",
-      "fingerprint": "04389a54673a0dfd08ddcad6fa6c2b5e945892c7592caa5687df933517eb913a",
-      "line": 370,
+      "fingerprint": "63d73603876445baeca23543eae9d8150f7d611bb8e32c152e25cb7ca4cb8bc0",
       "path": "src/pipeline/transcript_summary_verification.py",
       "targets": [
         "TranscriptAuditEvaluation",
@@ -697,8 +644,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Repeat validation compares exactly seven literal route and corpus fields between closed TranscriptAuditRepeat and TranscriptAuditQualification schemas; no dynamic execution target is selected.",
-      "fingerprint": "ed48fbf977cc106b3489d9e0b109cd29988eb3a03f585c6712b49f44e2fc05f4",
-      "line": 397,
+      "fingerprint": "488d1f4c8cd153eb7f8c96bd7b46240a8ab56181e668ea72e8aae126b50be878",
       "path": "src/pipeline/transcript_summary_verification.py",
       "targets": [
         "TranscriptAuditRepeat",
@@ -708,8 +654,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _METRIC_COLUMNS snapshot fields.",
-      "fingerprint": "228cccfcd38e0d46d870a217b4b1921dfa61736fd5d867938134cc2012bc4f79",
-      "line": 161,
+      "fingerprint": "1356f7b27f43079b0b9d9220465f4be11c1bd9c69782af74979f3e47ebd4ad1d",
       "path": "src/portfolio_risk_snapshot_store.py",
       "targets": [
         "_METRIC_COLUMNS"
@@ -718,8 +663,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Write path reads only _METRIC_COLUMNS snapshot fields.",
-      "fingerprint": "826f3c2ac62559ee8566e92735330808319a3b0810018b010affb60965b4a5bc",
-      "line": 265,
+      "fingerprint": "418330a8b07e006642ccffd75e6b9026345774af6852a3530ad92432e39158e5",
       "path": "src/portfolio_risk_snapshot_store.py",
       "targets": [
         "_METRIC_COLUMNS"
@@ -728,8 +672,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Selected issuer-document capture identity is compared against only the literal ExpectedDocument identity-field tuple. The attributes are schema data fields, not callable or dispatch targets.",
-      "fingerprint": "e6d12e61b62e50f07d41a114cac5f9d60895f8eef8a322bd75553f30cb50d4f1",
-      "line": 930,
+      "fingerprint": "5b2c04df37b07568507b6ddef3b174071afc649f4ac8f844350db460d766a9b1",
       "path": "src/provenance/analysis_scope.py",
       "targets": [
         "issuer_id",
@@ -741,8 +684,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Selected issuer-document periods compare only the two literal ExpectedDocument date fields. Both repeated getattr reads at this statement are data comparisons, not callable or dispatch targets.",
-      "fingerprint": "b6daec75f598d05ee487121de8b07d557ce6b1cc36b0afbed1e633520a420d40",
-      "line": 936,
+      "fingerprint": "1287fb28e56034606ec0629828fd3690e9d9e2db6eb14dda251361cdd28c35f4",
       "path": "src/provenance/analysis_scope.py",
       "targets": [
         "period_start",
@@ -752,8 +694,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
-      "fingerprint": "2b4889b932414159c0b02ed4c7214c7c63d05a3f8645189bc89998e9b949d209",
-      "line": 1374,
+      "fingerprint": "04513c4aafddc7c3409fed6010724eecae37d9cfbd85460749166d3fa1c65984",
       "path": "src/provenance/analysis_scope.py",
       "targets": [
         "issuer_id",
@@ -766,8 +707,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
-      "fingerprint": "7e98c97482fb3088f9879cca08dd9a82508f0311c72e5ad66f76eadcee23b7e4",
-      "line": 1377,
+      "fingerprint": "fee08852b3b8763c2252d5d5df6666be38dbb978e116ec177db99370ada8f0d4",
       "path": "src/provenance/analysis_scope.py",
       "targets": [
         "period_start",
@@ -777,8 +717,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr projects only _DISPOSITION_COLUMNS fields.",
-      "fingerprint": "c9d8a3170b5df5c4169c6747e78814ffa79552b8156bfea38540776e588394a6",
-      "line": 198,
+      "fingerprint": "ae158cba187d64e1fcf495d59d2b51a40f29c1476a7a965684d4904a54d89b4c",
       "path": "src/provenance/filing_xbrl_extraction_ledger.py",
       "targets": [
         "_DISPOSITION_COLUMNS"
@@ -787,8 +726,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr projects only _SEAL_COLUMNS fields.",
-      "fingerprint": "944645ae9354a3f5aefbad9a5d1225c8e7669157daf803c6cb6345b78f9f92b5",
-      "line": 247,
+      "fingerprint": "88411d86e157ab85ea2013afbe2ae62e26a450244204b6e26eeee60748caffb4",
       "path": "src/provenance/filing_xbrl_extraction_ledger.py",
       "targets": [
         "_SEAL_COLUMNS"
@@ -797,8 +735,7 @@
     {
       "disposition": "schema_field",
       "evidence": "publish_discrete_quarter compares only the local literal fields tuple on the selected operands' FactCellV2 source coordinates. The returned attributes are compared for equality; they are not invoked or used to select code.",
-      "fingerprint": "bada77fb2be45ecf78627350ff7b84dae19079a7ba05ced2fda8b5bdeb793ec4",
-      "line": 139,
+      "fingerprint": "9f590f736073bb10dfe1b73bb52d5c81a3792355216eac2321c0aa258d50e4fa",
       "path": "src/provenance/financial_derivations.py",
       "targets": [
         "reporting_entity_id",
@@ -820,8 +757,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "POSIX bounded-source preflight reads only os constants O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK from the literal generator tuple. A missing or zero constant refuses opening; this lookup dispatches no callable and has no input-selected attribute name.",
-      "fingerprint": "b94506cefc3145fb3176c77d94476f17ab5450323dc1143e3f124dff49e69df4",
-      "line": 56,
+      "fingerprint": "a98245baef205747544873f34e5c1ea8645eb9774fe2795cddaebfc52859b618",
       "path": "src/provenance/immutable_artifact.py",
       "targets": [
         "O_NOFOLLOW",
@@ -832,8 +768,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Replay validation iterates only the seven literal IrRawExchange fields declared immediately above this call. It compares retained governed response metadata with the schema-validated producing exchange; no attribute name comes from source content or a model response.",
-      "fingerprint": "4f73552df54eb17e65fb3a7f218afdd072a4494bd9fae03664a53aeaecd994ba",
-      "line": 928,
+      "fingerprint": "b7468f6cced54b9fab0dc97c2da238f95351226b235838dc5cf741277f66e059",
       "path": "src/provenance/ir_reported_facts.py",
       "targets": [
         "llm_call_id",
@@ -848,8 +783,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads the typed registry spec id_column.",
-      "fingerprint": "4bc18e5e5aecfdda815219257c5768bac4de18e093411803652ed8e1e868bf62",
-      "line": 500,
+      "fingerprint": "53e26b1cbf98f650f9822351cb9bc47f760f9fbe2a8de35a415dd428f12c6559",
       "path": "src/provenance/issuer_registry.py",
       "targets": [
         "id_column"
@@ -858,8 +792,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr is bounded by the locator parity validator fields.",
-      "fingerprint": "d4bd493d716a74ef43b08e25299eca370cd5b9df913db2932880979658d06683",
-      "line": 373,
+      "fingerprint": "0504393adb9e44b1face8a736a79061014ec1fa2e7511e6b551c458e58adebd0",
       "path": "src/provenance/legacy_fact_evidence_match.py",
       "targets": [
         "locator fields"
@@ -868,8 +801,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr is bounded by the locator digest validator fields.",
-      "fingerprint": "8b83d11d1d7c9ae8956efd9f8f1a0fbffabbef88cf15c1c6cf548c22d03ac6e1",
-      "line": 387,
+      "fingerprint": "018af0963dc635f56044652241b314b6f414d8c033c0bd5593f5cc98e6563513",
       "path": "src/provenance/legacy_fact_evidence_match.py",
       "targets": [
         "locator digest fields"
@@ -878,8 +810,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only the pinned extraction policy fields.",
-      "fingerprint": "3492e92b3ebc62bf86794254ba28006897516f0c6ae72a2ff72b1085bc282395",
-      "line": 93,
+      "fingerprint": "abd85a0e1e9e75a1b23732762ead5ae7d5d311e5d2a8da6a6edca1654704c5d6",
       "path": "src/provenance/pdf_table_extraction.py",
       "targets": [
         "extraction policy"
@@ -888,8 +819,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads the typed reporting-entity spec id_column.",
-      "fingerprint": "b0392bf342b7a2d534e7cdb98d2cd6ce5deb95016bf4fcf5a63af34b3477e848",
-      "line": 467,
+      "fingerprint": "f0d8e96976e8852f397c190de604bbefed2136aec05ec2613d96e9ad08fb43df",
       "path": "src/provenance/reporting_entity_registry.py",
       "targets": [
         "id_column"
@@ -898,8 +828,7 @@
     {
       "disposition": "schema_field",
       "evidence": "Columns come from SearchProjectionSeal.model_fields.",
-      "fingerprint": "a1290adf30468b9e6b8f304bfaeb7c2ae79342020b09511ca269bffc4a1ca0d9",
-      "line": 180,
+      "fingerprint": "1b1db52ab648a98b69739a6bea24c69c0496091d9385399b7c19d24b9aecb10b",
       "path": "src/provenance/search_index_lineage.py",
       "targets": [
         "SearchProjectionSeal.model_fields"
@@ -908,8 +837,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Retained SEC member replay compares DocumentVersion and ExpectedSecDocument using only the literal native identity/period-field tuple. The attributes are schema data; no callable, module or command is selected.",
-      "fingerprint": "9f3acc0c118fb8033ac66730da64ecd3b9047cdd0097abedbd42f565c68cdcc5",
-      "line": 263,
+      "fingerprint": "9978e9c998571867058aa34e2ad283e7a0aab13c4519cbb930701668b02b163b",
       "path": "src/provenance/sec_submission_import.py",
       "targets": [
         "issuer_id",
@@ -924,8 +852,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Native parent replay iterates only the closed table/identity/schema tuples: evidence_source_observations with observation_id on SourceObservation, and evidence_content_blobs with sha256 on ContentBlob. The attribute supplies a bound SQL identity value; no callable or code target is selected.",
-      "fingerprint": "0f33141df7d8a6dfd95d5feed8b3af48362398577f53b21c8ff07957a09c6806",
-      "line": 615,
+      "fingerprint": "81c55dae40bb989b40377be3fa4a945a4e8fb790cc161e1c99e270b8983262f2",
       "path": "src/provenance/sec_submission_import.py",
       "targets": [
         "observation_id",
@@ -935,8 +862,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr projects only the typed publication-member columns.",
-      "fingerprint": "1508d851c889f45ab469be852653f20928ff2903e1862d347c158e4b531d22fe",
-      "line": 755,
+      "fingerprint": "0d39ff0420e66f99ac35a4f70fd5892fadf1a28e10b26611e96d7f3ec1edfe37",
       "path": "src/provenance/source_fact_repository.py",
       "targets": [
         "member_columns"
@@ -945,8 +871,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr normalizes only the fixed commit and tree fields declared by EvidenceBundleManifest.",
-      "fingerprint": "e30989438caad02cf179c5f6f09bc3b7c9e7e39e30f00bffa6c8dcf94c28071e",
-      "line": 238,
+      "fingerprint": "ee4113c191b205c8f43c2b89b50c675f2dc7e2ccf3ad2028cdc869ed21844f00",
       "path": "src/quality/evidence_bundle_models.py",
       "targets": [
         "EvidenceBundleManifest commit and tree fields"
@@ -955,8 +880,7 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "2c619acef5063dce11978ab5ce2b6eb31df9fbdb691b18bbee81ed08ea459aa1",
-      "line": 551,
+      "fingerprint": "85c447da751cd2ff87655734f5d34029a85ea60f27619491a88410a569fb85c2",
       "path": "src/report/offline_artifact.py",
       "targets": [
         "kernel32"
@@ -965,8 +889,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "NativeApi resolves only the literal (library, export, result type, argument types) tuples declared immediately above this loop. Libraries are the four fixed WinDLL instances kernel32, advapi32, user32 and userenv; no caller value enters the export name or library. Every resolved function receives the declared ABI types. The complete export set is recorded here; this bounds attribute dispatch but does not prove native ABI or containment qualification.",
-      "fingerprint": "92b55d24ff302707a89aa3741cbfd46386186ebf3b47e52c3db36117a017fd15",
-      "line": 428,
+      "fingerprint": "357063d8a3adb8384e73ffb2aaf260d2286b3fe879acf7844ec4a60cc88e392b",
       "path": "src/runtime/windows_appcontainer.py",
       "targets": [
         "advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW",
@@ -1022,8 +945,7 @@
     {
       "disposition": "schema_field",
       "evidence": "Columns come from EmbeddingEvaluationReceipt.model_fields.",
-      "fingerprint": "66f4d5f3699de815932d257736e0a82ddf6043811ae96e9464eb01783b5ee85d",
-      "line": 145,
+      "fingerprint": "c27e856975f0f7f26dbf2450fa709fb2e79125113b31525cd7afae94f089b6b8",
       "path": "src/search/embedding_promotion.py",
       "targets": [
         "EmbeddingEvaluationReceipt.model_fields"
@@ -1032,8 +954,7 @@
     {
       "disposition": "schema_field",
       "evidence": "Columns come from EmbeddingRuntimeRegistration.model_fields.",
-      "fingerprint": "22e4937db2133eaa96f9b272b20310af99fcaf650103b35b36513037ba268f33",
-      "line": 116,
+      "fingerprint": "57d083a5352fd4d878bac181501fee1f6edd5cf8bb7fca8d1367301c34312023",
       "path": "src/search/embedding_runtime_registration.py",
       "targets": [
         "EmbeddingRuntimeRegistration.model_fields"
@@ -1042,8 +963,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Offline-mode verification reads only the two fixed fastembed attribute spellings in the adjacent literal tuple.",
-      "fingerprint": "165ba4e418d125ea1679713dffe0165793c91679bb4b155a16cd709b569f0458",
-      "line": 596,
+      "fingerprint": "af4a030a103e397d963358860c1021582c4907c5dc698df28542161ca6228846",
       "path": "src/search/local_vector.py",
       "targets": [
         "local_files_only",
@@ -1053,8 +973,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "The missing-evidence census reads only the six literal fields on validated SourceAttemptMeasurement records.",
-      "fingerprint": "02402ceed9ad3e90aedf437e58f0f41943825f1a9c5eaf40c2465bbbc3208405",
-      "line": 329,
+      "fingerprint": "f8b5da1d48985f40ba57f6146760762e90ceab12c1deaefecdbb78148bc85042",
       "path": "src/sources/telemetry.py",
       "targets": [
         "regime",
@@ -1068,8 +987,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "The measured-cost sum reads only the three literal nullable Decimal fields on validated SourceAttemptMeasurement records.",
-      "fingerprint": "220e7f4e29ff6835b5ca3417cf469c679d66948ea9778b0baf1119c1b5a9905c",
-      "line": 341,
+      "fingerprint": "953d764969f77a4fc9182134ccc89a1df36384e210ef64e7785fdd96c8cdf585",
       "path": "src/sources/telemetry.py",
       "targets": [
         "provider_cost_usd",
@@ -1080,8 +998,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Test-only baseline mutation reads an Assum value from synthetic_cases using exactly the five literal pytest parameter keys declared immediately above the test. No callable or dispatch target is selected; this exact test seam is classified without changing the protected residual unknown-edge total.",
-      "fingerprint": "38050665002dd8aa3d0704ac863a1d18ad49b5fe56d0948a714a02dcb9a41443",
-      "line": 45,
+      "fingerprint": "6895820ea0853bad04e6598969f9261c0cc452600a6721340ad79d7dc44b5e09",
       "path": "tests/test_meli_workbook_recalculation.py",
       "targets": [
         "comm_rev0",
@@ -1094,8 +1011,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "The parameterized reporting-date regression selects only the two literal quarter and annual cell readers declared in its pytest parameter table.",
-      "fingerprint": "af9af31888039a8e7e7b19d7ed2e4e8a5e3066cb27b82ec9c14b4713d2df5822",
-      "line": 205,
+      "fingerprint": "fce4a75ecec661d88759b853a06272b89575d916c8377b2bd76e9e12326dc729",
       "path": "tests/test_metrics_engine_io.py",
       "targets": [
         "_build_quarter_cells",
@@ -1105,8 +1021,7 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Synthetic positive authority fixture saves and restores exactly the four db globals in the literal DB_PATH/DATA_DIR/FMP_DIR/STATE_ROOT tuple. This getattr has no data-supplied field or production caller.",
-      "fingerprint": "719f380f62b16d0102331b7f110388ccdc2c7970f05c760b8509cef01510643a",
-      "line": 56,
+      "fingerprint": "0890377776722592556de6dc834c0d0b17ddd0191e311a0720feba0b54fd812e",
       "path": "tests/test_runtime_state_authority.py",
       "targets": [
         "DB_PATH",
@@ -1121,12 +1036,11 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "4d64cf0e0de04053eb8f29f1ace733f117efdfd8b49bb0c6a97d29a889406192",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
-    "scanner_sha256": "11592211772d3a044ff46385303df7cbf4bc3f192b7354bfe72dece798003d76",
+    "scanner_sha256": "aeb9bcbae69f099556a6343a013412cfb1d7e3614ba17a3e1377a0456de6cc51",
     "schema_version": "operational-reachability-raw/v1"
   },
-  "schema_version": "reachability-getattr-dispositions/v2"
+  "schema_version": "reachability-getattr-dispositions/v3"
 }

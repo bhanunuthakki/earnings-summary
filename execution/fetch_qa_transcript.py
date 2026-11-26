@@ -260,11 +260,17 @@ def _restore_replay(
         expected_size_bytes=artifact.size_bytes,
     )
     qa_result = validate_synthesized_transcript(output_path)
+    provider = artifact.authorization.request.provider
+    source_label = (
+        provider.value
+        if provider is TranscriptProvider.ISSUER_IR
+        else f"aggregator_{provider.value}"
+    )
     index_manager.register_transcript(
         resolve_ticker(spec.ticker),
         spec.year,
         f"Q{spec.quarter}",
-        source="issuer_ir",
+        source=source_label,
         filepath=output_path.name,
         has_qa=True,
         qa_status=qa_result.status.value,

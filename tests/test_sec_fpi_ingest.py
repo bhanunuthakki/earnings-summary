@@ -8,7 +8,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock
+
+import requests
 
 from models.facts import Currency, Unit
 from pipeline.sec_fpi_ingest import (
@@ -16,6 +19,7 @@ from pipeline.sec_fpi_ingest import (
     extract_fpi_financial_facts_html,
     extract_fpi_kpis_narrative,
     fetch_fpi_exhibit,
+    locate_fpi_exhibit,
     parse_numeric,
     persist_fpi_facts,
     resolve_cik,
@@ -326,3 +330,121 @@ def test_extract_fpi_handles_dkk_million_standalone_fcf_and_ignores_pct_cells() 
     # Also verify Q4 nominal quarter resolves cleanly without KeyError
     q4_end, _ = expected_period_ends("Q4", 2025, 12, 31)
     assert q4_end.isoformat() == "2025-12-31"
+
+
+def test_locate_fpi_exhibit_matches_bn_and_tsm_6k_exhibits() -> None:
+    submissions_by_cik = {
+        "0001001085": {
+            "filings": {
+                "recent": {
+                    "form": ["6-K", "6-K"],
+                    "filingDate": ["2026-11-16", "2026-08-17"],
+                    "accessionNumber": ["0001001085-26-000030", "0001001085-26-000021"],
+                }
+            }
+        },
+        "0001046179": {
+            "filings": {
+                "recent": {
+                    "form": ["6-K", "6-K"],
+                    "filingDate": ["2026-11-13", "2026-08-14"],
+                    "accessionNumber": ["0001046179-26-000801", "0001046179-26-000541"],
+                }
+            }
+        },
+    }
+    indexes = {
+        "0001001085-26-000030": {
+            "directory": {
+                "item": [{"name": "a2026-q36xkcover.htm"}, {"name": "a2026-q3bninterimreport.htm"}]
+            }
+        },
+        "0001001085-26-000021": {
+            "directory": {"item": [{"name": "a2026-q26xkcover.htm"}, {"name": "bn-20260630.htm"}]}
+        },
+        "0001046179-26-000801": {
+            "directory": {
+                "item": [
+                    {"name": "tsm-fsx20261113x6k.htm"},
+                    {"name": "a2026q3consolidatedreport-.htm"},
+                ]
+            }
+        },
+        "0001046179-26-000541": {
+            "directory": {
+                "item": [
+                    {"name": "tsm-fsx20260814x6k.htm"},
+                    {"name": "a2026q2consolidatedreport-.htm"},
+                ]
+            }
+        },
+    }
+
+    class _FakeResp:
+        def __init__(self, payload: object) -> None:
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self) -> object:
+            return self._payload
+
+    class _FakeSess:
+        def get(self, url: str, **_kwargs: object) -> _FakeResp:
+            if "CIK0001001085.json" in url:
+                return _FakeResp(submissions_by_cik["0001001085"])
+            if "CIK0001046179.json" in url:
+                return _FakeResp(submissions_by_cik["0001046179"])
+            for accn, idx in indexes.items():
+                if accn.replace("-", "") in url:
+                    return _FakeResp(idx)
+            raise AssertionError(f"unexpected URL: {url}")
+
+    sess = cast("requests.Session", _FakeSess())
+    bn_q3 = locate_fpi_exhibit("BN", quarter="Q3", year=2026, session=sess)
+    bn_q2 = locate_fpi_exhibit("BN", quarter="Q2", year=2026, session=sess)
+    tsm_q3 = locate_fpi_exhibit("TSM", quarter="Q3", year=2026, session=sess)
+    assert bn_q3 is not None and bn_q3.exhibit_filename == "a2026-q3bninterimreport.htm"
+    assert bn_q2 is not None and bn_q2.exhibit_filename == "bn-20260630.htm"
+    assert tsm_q3 is not None and tsm_q3.exhibit_filename == "a2026q3consolidatedreport-.htm"
+
+
+def test_extract_fpi_handles_bn_parenthetical_scale_fallback_and_tsm_note_labels() -> None:
+    bn_like = """
+    <html><body>
+      <table>
+        <tr><td></td><td colspan="2">Three Months Ended</td><td colspan="2">Nine Months Ended</td></tr>
+        <tr><td>(UNAUDITED) FOR THE PERIODS ENDED SEP. 30</td><td>2026</td><td>2025</td><td>2026</td><td>2025</td></tr>
+        <tr><td colspan="5">TOTAL (MILLIONS, EXCEPT PER SHARE AMOUNTS)</td></tr>
+        <tr><td>Revenues</td><td>$ 20,691</td><td>$ 18,917</td><td>$ 58,677</td><td>$ 54,100</td></tr>
+        <tr><td>Net income attributable to shareholders</td><td>1,305</td><td>219</td><td>1,771</td><td>564</td></tr>
+        <tr><td>Earnings per share - Diluted</td><td>0.54</td><td>0.08</td><td>0.70</td><td>0.22</td></tr>
+      </table>
+    </body></html>
+    """
+    dt = datetime(2026, 9, 30, tzinfo=UTC)
+    assert extract_fpi_financial_facts_html(bn_like, "BN", dt, "Q3") == {}
+    bn_facts = extract_fpi_financial_facts_html(
+        bn_like, "BN", dt, "Q3", fallback_currency=Currency.USD
+    )
+    assert bn_facts["revenue"][:2] == (Decimal("20691000000"), "USD")
+    assert bn_facts["net_income"][:2] == (Decimal("1305000000"), "USD")
+    assert bn_facts["eps_diluted"][:2] == (Decimal("0.54"), "USD")
+
+    tsm_like = """
+    <html><body>
+      <p>(In Thousands of New Taiwan Dollars, Except Earnings Per Share)</p>
+      <table>
+        <tr><td></td><td colspan="2">For the Three Months Ended September 30</td></tr>
+        <tr><td></td><td>2026</td><td>2025</td></tr>
+        <tr><td>NET REVENUE (Notes 20, 31 and 37)</td><td>$ 1,494,243,284</td><td>$ 989,918,000</td></tr>
+        <tr><td>GROSS PROFIT</td><td>992,378,650</td><td>570,000,000</td></tr>
+        <tr><td>INCOME FROM OPERATIONS (Note 37)</td><td>876,445,164</td><td>500,000,000</td></tr>
+        <tr><td>NET INCOME</td><td>763,340,827</td><td>452,000,000</td></tr>
+      </table>
+    </body></html>
+    """
+    tsm_facts = extract_fpi_financial_facts_html(tsm_like, "TSM", dt, "Q3")
+    assert tsm_facts["revenue"][:2] == (Decimal("1494243284000"), "TWD")
+    assert tsm_facts["gross_profit"][:2] == (Decimal("992378650000"), "TWD")
+    assert tsm_facts["operating_income"][:2] == (Decimal("876445164000"), "TWD")
+    assert tsm_facts["net_income"][:2] == (Decimal("763340827000"), "TWD")

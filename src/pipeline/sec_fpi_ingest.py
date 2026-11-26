@@ -55,14 +55,24 @@ _MIN_TEXT_CHARS = 800
 
 # Per-ticker exhibit regex heuristics for quarterly 6-K earnings releases
 _TICKER_EXHIBIT_HINT: dict[str, re.Pattern[str]] = {
+    "BN": re.compile(r"(?:interimreport|bn-\d{8})\.htm$", re.IGNORECASE),
     "NU": re.compile(r"^nufs\d.*_6k\.htm$", re.IGNORECASE),
     "NVO": re.compile(r"^caq?\d[\dA-Za-z]*\.htm$", re.IGNORECASE),
+    "TSM": re.compile(r"^a20\d{2}q[1-4]consolidatedreport.*\.htm$", re.IGNORECASE),
     "WIX": re.compile(r"^(?:first|second|third|fourth)quarter", re.IGNORECASE),
     "ASML": re.compile(r"financialstatements|pressrelease", re.IGNORECASE),
 }
 
+# Per-ticker reporting currency fallback when a 6-K interim financial table omits
+# an explicit currency code (e.g. Brookfield Corporation reports in USD with bare "$" symbols).
+_ISSUER_FALLBACK_CURRENCY: dict[str, Currency] = {
+    "BN": Currency.USD,
+}
+
 # Fallback keywords for exhibit discovery when primary hint does not match
 _FALLBACK_EXHIBIT_KEYWORDS = [
+    "interimreport",
+    "consolidatedreport",
     "results",
     "earnings",
     "financial statements",
@@ -213,51 +223,39 @@ def locate_fpi_exhibit(
         if not isinstance(items, list):
             continue
 
-        # Strategy 1: Match with ticker exhibit hint regex
+        base_url = _ARCHIVES_BASE.format(cik_int=int(cik), accn_nodash=accn_nodash)
+        item_dicts: list[dict[str, object]] = [
+            cast("dict[str, object]", it)
+            for it in cast("list[object]", items)
+            if isinstance(it, dict)
+        ]
+        matched: tuple[str, str] | None = None
         if hint is not None:
-            for item in cast("list[object]", items):
-                if not isinstance(item, dict):
-                    continue
-                name = cast("dict[str, object]", item).get("name")
-                desc = str(cast("dict[str, object]", item).get("description", ""))
+            for item in item_dicts:
+                name = item.get("name")
                 if isinstance(name, str) and hint.search(name):
-                    exhibit_url = (
-                        _ARCHIVES_BASE.format(cik_int=int(cik), accn_nodash=accn_nodash) + name
-                    )
-                    return LocatedFpiExhibit(
-                        ticker=ticker,
-                        cik=cik,
-                        form_type=form_type,
-                        accession=accn,
-                        filing_date=filing_date,
-                        exhibit_filename=name,
-                        exhibit_url=exhibit_url,
-                        description=desc,
-                    )
-
-        # Strategy 2: Fallback search on item descriptions or keywords
-        for item in cast("list[object]", items):
-            if not isinstance(item, dict):
-                continue
-            name = cast("dict[str, object]", item).get("name")
-            desc = str(cast("dict[str, object]", item).get("description", "")).lower()
-            if not isinstance(name, str) or not (name.endswith(".htm") or name.endswith(".html")):
-                continue
-            name_lower = name.lower()
-            if any(kw in desc or kw in name_lower for kw in _FALLBACK_EXHIBIT_KEYWORDS):
-                exhibit_url = (
-                    _ARCHIVES_BASE.format(cik_int=int(cik), accn_nodash=accn_nodash) + name
-                )
-                return LocatedFpiExhibit(
-                    ticker=ticker,
-                    cik=cik,
-                    form_type=form_type,
-                    accession=accn,
-                    filing_date=filing_date,
-                    exhibit_filename=name,
-                    exhibit_url=exhibit_url,
-                    description=desc,
-                )
+                    matched = (name, str(item.get("description", "")))
+                    break
+        if matched is None:
+            for item in item_dicts:
+                name = item.get("name")
+                desc = str(item.get("description", "")).lower()
+                if isinstance(name, str) and name.endswith((".htm", ".html")):
+                    name_lower = name.lower()
+                    if any(kw in desc or kw in name_lower for kw in _FALLBACK_EXHIBIT_KEYWORDS):
+                        matched = (name, desc)
+                        break
+        if matched is not None:
+            return LocatedFpiExhibit(
+                ticker=ticker,
+                cik=cik,
+                form_type=form_type,
+                accession=accn,
+                filing_date=filing_date,
+                exhibit_filename=matched[0],
+                exhibit_url=base_url + matched[0],
+                description=matched[1],
+            )
 
     return None
 
@@ -360,52 +358,33 @@ _CURRENCY_ALIASES: tuple[tuple[str, Currency], ...] = (
     (r"\bCANADIAN\s+DOLLARS?\b", Currency.CAD),
     (r"\bSWISS\s+FRANCS?\b", Currency.CHF),
 )
-_SCALE_BILLIONS_RE = re.compile(
-    r"(?:\bin\s+(?:[a-z]{2,4}\s+|us\$\s*|nt\$\s*|u\.?s\.?\s+dollars?\s+)?billions?\b|"
-    r"\bbillions?\s+of\s+(?:[a-z.]+\s+){0,3}(?:dollars?|kroner|reais|euros?|pounds?|francs?)\b|"
-    r"\b(?:dkk|usd|eur|cad|twd|gbp|chf|brl|kr)\s+billions?\b|"
-    r"(?:€|£|\$|nt\$|us\$)\s+billions?\b)",
-    re.IGNORECASE,
-)
-_SCALE_MILLIONS_RE = re.compile(
-    r"(?:\bin\s+(?:[a-z]{2,4}\s+|us\$\s*|nt\$\s*|u\.?s\.?\s+dollars?\s+)?millions?\b|"
-    r"\bmillions?\s+of\s+(?:[a-z.]+\s+){0,3}(?:dollars?|kroner|reais|euros?|pounds?|francs?)\b|"
-    r"\b(?:dkk|usd|eur|cad|twd|gbp|chf|brl|kr)\s+millions?\b|"
-    r"(?:€|£|\$|nt\$|us\$)\s+millions?\b)",
-    re.IGNORECASE,
-)
-_SCALE_THOUSANDS_RE = re.compile(
-    r"(?:\bin\s+(?:[a-z]{2,4}\s+|us\$\s*|nt\$\s*|u\.?s\.?\s+dollars?\s+)?thousands?\b|"
-    r"\bthousands?\s+of\s+(?:[a-z.]+\s+){0,3}(?:dollars?|kroner|reais|euros?|pounds?|francs?)\b|"
-    r"\b(?:dkk|usd|eur|cad|twd|gbp|chf|brl|kr)\s+thousands?\b|"
-    r"(?:€|£|\$|nt\$|us\$)\s+thousands?\b|"
-    r"\(000'?s?\))",
-    re.IGNORECASE,
+
+
+def _scale_re(word: str, *, extra: str = "") -> re.Pattern[str]:
+    extra_alt = f"|{extra}" if extra else ""
+    return re.compile(
+        rf"(?:\bin\s+(?:[a-z]{{2,4}}\s+|us\$\s*|nt\$\s*|u\.?s\.?\s+dollars?\s+)?{word}s?\b|"
+        rf"\b{word}s?\s+of\s+(?:[a-z.]+\s+){{0,3}}(?:dollars?|kroner|reais|euros?|pounds?|francs?)\b|"
+        rf"\b(?:dkk|usd|eur|cad|twd|gbp|chf|brl|kr)\s+{word}s?\b|"
+        rf"(?:€|£|\$|nt\$|us\$)\s+{word}s?\b|"
+        rf"\(\s*(?:us\$?\s*)?{word}s?\b{extra_alt})",
+        re.IGNORECASE,
+    )
+
+
+_SCALE_BILLIONS_RE = _scale_re("billion")
+_SCALE_MILLIONS_RE = _scale_re("million")
+_SCALE_THOUSANDS_RE = _scale_re("thousand", extra=r"\(000'?s?\)")
+_PAIRED_CURR_ALT = (
+    r"\b(?:USD|EUR|GBP|JPY|DKK|BRL|CAD|INR|AUD|KRW|CHF|TWD)\b"
+    r"|\bUS\s*\$|\bU\.?S\.?\s+DOLLARS?\b|\bUS\s+DOLLARS?\b"
+    r"|NT\$|\bNEW\s+TAIWAN\s+DOLLARS?\b|\bDANISH\s+KRONER?\b"
+    r"|\bCANADIAN\s+DOLLARS?\b|\bSWISS\s+FRANCS?\b|\bBRAZILIAN\s+REAIS?\b"
+    r"|\bEUROS?\b|€|\bPOUNDS?\s+STERLING\b|£"
 )
 _SCALE_PAIRED_CURRENCY_RE = re.compile(
-    r"(?:"
-    r"\b(USD|EUR|GBP|JPY|DKK|BRL|CAD|INR|AUD|KRW|CHF|TWD)\b"
-    r"|(\bUS\s*\$|\bU\.?S\.?\s+DOLLARS?\b|\bUS\s+DOLLARS?\b)"
-    r"|(NT\$|\bNEW\s+TAIWAN\s+DOLLARS?\b)"
-    r"|(\bDANISH\s+KRONER?\b)"
-    r"|(\bCANADIAN\s+DOLLARS?\b)"
-    r"|(\bSWISS\s+FRANCS?\b)"
-    r"|(\bBRAZILIAN\s+REAIS?\b)"
-    r"|(\bEUROS?\b|€)"
-    r"|(\bPOUNDS?\s+STERLING\b|£)"
-    r")\s+(?:in\s+)?(?:thousands?|millions?|billions?)"
-    r"|(?:thousands?|millions?|billions?)\s+(?:of\s+)?"
-    r"(?:"
-    r"\b(USD|EUR|GBP|JPY|DKK|BRL|CAD|INR|AUD|KRW|CHF|TWD)\b"
-    r"|(\bUS\s*\$|\bU\.?S\.?\s+DOLLARS?\b|\bUS\s+DOLLARS?\b)"
-    r"|(NT\$|\bNEW\s+TAIWAN\s+DOLLARS?\b)"
-    r"|(\bDANISH\s+KRONER?\b)"
-    r"|(\bCANADIAN\s+DOLLARS?\b)"
-    r"|(\bSWISS\s+FRANCS?\b)"
-    r"|(\bBRAZILIAN\s+REAIS?\b)"
-    r"|(\bEUROS?\b|€)"
-    r"|(\bPOUNDS?\s+STERLING\b|£)"
-    r")",
+    rf"(?:{_PAIRED_CURR_ALT})\s+(?:in\s+)?(?:thousands?|millions?|billions?)"
+    rf"|(?:thousands?|millions?|billions?)\s+(?:of\s+)?(?:{_PAIRED_CURR_ALT})",
     re.IGNORECASE,
 )
 
@@ -633,9 +612,10 @@ def _select_target_column(
 
 
 _LABEL_FOOTNOTE_RE = re.compile(r"(?:\s+\d+\))+\s*$")
+_LABEL_NOTE_RE = re.compile(r"\s*\(notes?\b[^)]*\)\s*$", re.IGNORECASE)
+_RATIO_WORD_RE = re.compile(r"\bratios?\b")
 _DISQUALIFY_LABEL_TOKENS = (
     "margin",
-    "ratio",
     "%",
     "non-controlling",
     "noncontrolling",
@@ -652,8 +632,13 @@ _DISQUALIFY_LABEL_TOKENS = (
 def _match_line_item_label(raw_label: str) -> tuple[str, int, bool] | None:
     """Map a normalized table row label to ``(line_item, priority, is_unscaled)``."""
     norm = _UNICODE_MINUS_RE.sub("-", _WS_RE.sub(" ", raw_label)).strip().lower()
+    norm = _LABEL_NOTE_RE.sub("", norm).strip()
     norm = _LABEL_FOOTNOTE_RE.sub("", norm).strip()
-    if not norm or any(tok in norm for tok in _DISQUALIFY_LABEL_TOKENS):
+    if (
+        not norm
+        or any(tok in norm for tok in _DISQUALIFY_LABEL_TOKENS)
+        or _RATIO_WORD_RE.search(norm)
+    ):
         return None
 
     if "earnings per share" in norm or "diluted eps" in norm:
@@ -669,9 +654,11 @@ def _match_line_item_label(raw_label: str) -> tuple[str, int, bool] | None:
         "total revenues",
         "revenue",
         "revenues",
+        "net revenue",
+        "net revenues",
         "net sales",
         "net sales ifrs",
-    ) or norm.startswith(("total revenue", "net sales")):
+    ) or norm.startswith(("total revenue", "net sales", "net revenue")):
         return ("revenue", 1, False)
 
     if norm == "gross profit" or norm.startswith("gross profit"):
@@ -753,7 +740,12 @@ def _pick_row_cell_value(
 
 
 def extract_fpi_financial_facts_html(
-    html_text: str, ticker: str, period_end: datetime, fiscal_period_type: str
+    html_text: str,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: str,
+    *,
+    fallback_currency: Currency | None = None,
 ) -> dict[str, tuple[Decimal, str, str]]:
     """Extract standard GAAP/IFRS line items from 6-K or 20-F HTML tables.
 
@@ -789,8 +781,13 @@ def extract_fpi_financial_facts_html(
 
         currency, scale = _detect_table_currency_and_scale(header_text, t_text)
         if currency is None:
-            # Never turn an unqualified "$" into USD.
-            continue
+            if fallback_currency is not None and not _all_declared_currencies(
+                header_text + " " + t_text
+            ):
+                currency = fallback_currency
+            else:
+                # Never turn an unqualified "$" into USD without an issuer fallback.
+                continue
 
         target_col, excluded_cols = _select_target_column(
             header_rows, period_end=period_end, fiscal_period_type=fiscal_period_type
@@ -1097,8 +1094,14 @@ def ingest_fpi_for_ticker(
         repo_root=repo_root,
     )
 
+    fallback_currency = _ISSUER_FALLBACK_CURRENCY.get(ticker)
+
     financial_facts = extract_fpi_financial_facts_html(
-        fetched.raw_html, ticker, period_end_dt, p_quarter
+        fetched.raw_html,
+        ticker,
+        period_end_dt,
+        p_quarter,
+        fallback_currency=fallback_currency,
     )
     kpis = extract_fpi_kpis_narrative(fetched.raw_html, fetched.plain_text, ticker)
 

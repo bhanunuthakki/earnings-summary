@@ -700,57 +700,70 @@ def main() -> int:
             if selected is not None:
                 raw_authorizations[path] = selected
                 continue
-            request = TranscriptAcquisitionRequest(
-                schema_version="transcript-acquisition-request@2",
-                entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
-                canonical_ticker=parsed.ticker,
-                fiscal_year=parsed.fiscal_year_label,
-                fiscal_quarter=parsed.quarter_idx,
-                as_of=current_utc_date(),
-                source_type=SourceType.IR_DOC,
-                document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
-                provider=TranscriptProvider.ISSUER_IR,
-                owner_requested=bool(args.ticker) and not args.automatic,
-                existing_artifact=False,
-                existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
-                source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
-                source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
-            )
-            current_authorization = authorize_transcript_request(conn, request)
-            if (
-                current_authorization.reason
-                is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
-            ):
-                print(
-                    json.dumps(
-                        {
-                            "event": "reported_period_selection_pending",
-                            "ticker": parsed.ticker,
-                            "deferred_count": len(pending_scope),
-                        },
-                        sort_keys=True,
-                    )
-                )
-                return 0
+            raw_bytes = path.read_bytes()
+            owner_requested = bool(args.ticker) and not args.automatic
+            today = current_utc_date()
             try:
-                artifact = load_authorized_transcript_replay(
-                    conn,
-                    request=request,
-                    project_root=evidence_root,
-                    trusted_staging_root=staging_root,
-                )
-                if (
-                    artifact is None
-                    or read_authorized_transcript(
+                artifact: AuthorizedTranscriptArtifact | None = None
+                for provider in (
+                    TranscriptProvider.ISSUER_IR,
+                    TranscriptProvider.ROIC,
+                    TranscriptProvider.STOCKANALYSIS,
+                    TranscriptProvider.TICKERTRENDS,
+                ):
+                    request = TranscriptAcquisitionRequest(
+                        schema_version="transcript-acquisition-request@2",
+                        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+                        canonical_ticker=parsed.ticker,
+                        fiscal_year=parsed.fiscal_year_label,
+                        fiscal_quarter=parsed.quarter_idx,
+                        as_of=today,
+                        source_type=SourceType.IR_DOC,
+                        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+                        provider=provider,
+                        owner_requested=owner_requested,
+                        existing_artifact=False,
+                        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+                        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+                        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+                    )
+                    current_authorization = authorize_transcript_request(conn, request)
+                    if (
+                        current_authorization.reason
+                        is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
+                    ):
+                        print(
+                            json.dumps(
+                                {
+                                    "event": "reported_period_selection_pending",
+                                    "ticker": parsed.ticker,
+                                    "deferred_count": len(pending_scope),
+                                },
+                                sort_keys=True,
+                            )
+                        )
+                        return 0
+                    candidate_artifact = load_authorized_transcript_replay(
                         conn,
-                        artifact,
+                        request=request,
                         project_root=evidence_root,
                         trusted_staging_root=staging_root,
                     )
-                    != path.read_bytes()
-                ):
+                    if (
+                        candidate_artifact is not None
+                        and read_authorized_transcript(
+                            conn,
+                            candidate_artifact,
+                            project_root=evidence_root,
+                            trusted_staging_root=staging_root,
+                        )
+                        == raw_bytes
+                    ):
+                        artifact = candidate_artifact
+                        break
+                if artifact is None:
                     raise TranscriptAcquisitionDeniedError(
-                        f"{path.name} lacks its exact durable issuer acquisition receipt"
+                        f"{path.name} lacks its exact durable acquisition receipt"
                     )
             except (OSError, ValueError, TranscriptAcquisitionDeniedError) as exc:
                 sys.stderr.write(
