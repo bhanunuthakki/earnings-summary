@@ -133,10 +133,9 @@ def test_persist_footnote_drivers_is_idempotent_and_binds_doc_id(
                 ticker, source_type, doc_type, file_path, sha256,
                 fetched_at, fetch_status, raw_bytes_size, source_quality_tier
             ) VALUES ('META', 'sec_xbrl', '10-K', 'data/sec_text/META_10k_2025.txt',
-                      'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
-                      ?, 'ok', 100, 'sec_official')
+                      ?, ?, 'ok', 100, 'sec_official')
             """,
-            (now,),
+            ("0" * 64, now),
         )
         doc_id = int(cur.lastrowid or 0)
         rows = [
