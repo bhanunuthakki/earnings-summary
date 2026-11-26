@@ -18,8 +18,12 @@ from typing import cast
 
 from filings.store import delete_sections_by_ids
 from provenance.evidence_node_store import (
+    EVIDENCE_NODE_FK_QUERIES as _EVIDENCE_NODE_FK_QUERIES,
+)
+from provenance.evidence_node_store import (
     has_external_archives_table,
-    write_run_nodes_archive,
+    merge_run_nodes_archive,
+    peel_leaf_evidence_nodes,
 )
 from provenance.selection import selected_filing_sections_relation
 from run_lock import hold_run_lock
@@ -45,60 +49,6 @@ _COVERAGE_TRIGGERS: tuple[tuple[str, str], ...] = (
     ("expected_documents", "trg_expected_documents_append_only_delete"),
 )
 
-# Static SQL for every allowlisted external FK table referencing evidence_nodes(node_id).
-# Any additional table discovered via PRAGMA foreign_key_list fails closed until registered here.
-_EVIDENCE_NODE_FK_QUERIES: dict[tuple[str, str], str] = {
-    ("canonical_fact_projection_entries", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM canonical_fact_projection_entries "
-        "WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("fact_observations_v2", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM fact_observations_v2 "
-        "WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("fact_selection_decisions", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM fact_selection_decisions "
-        "WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("filing_xbrl_raw_fact_commitments", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM filing_xbrl_raw_fact_commitments "
-        "WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("image_ocr_results", "node_id"): (
-        "SELECT DISTINCT node_id FROM image_ocr_results WHERE node_id IS NOT NULL"
-    ),
-    ("latest_governed_narrative_entries", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM latest_governed_narrative_entries "
-        "WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("legacy_document_evidence_binding_revisions", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM legacy_document_evidence_binding_revisions "
-        "WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("legacy_fact_evidence_match_revisions", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM legacy_fact_evidence_match_revisions "
-        "WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("ocr_page_results", "node_id"): (
-        "SELECT DISTINCT node_id FROM ocr_page_results WHERE node_id IS NOT NULL"
-    ),
-    ("reported_observations", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM reported_observations "
-        "WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("search_chunks", "evidence_node_id"): (
-        "SELECT DISTINCT evidence_node_id FROM search_chunks WHERE evidence_node_id IS NOT NULL"
-    ),
-    ("kpi_definition_revisions", "source_evidence_node_id"): (
-        "SELECT DISTINCT source_evidence_node_id FROM kpi_definition_revisions "
-        "WHERE source_evidence_node_id IS NOT NULL"
-    ),
-    ("kpi_definition_comparability_revisions", "source_evidence_node_id"): (
-        "SELECT DISTINCT source_evidence_node_id FROM kpi_definition_comparability_revisions "
-        "WHERE source_evidence_node_id IS NOT NULL"
-    ),
-}
-
 _CANDIDATE_LEAF_CELLS_SQL = (
     "SELECT n.extraction_run_id, n.node_id, "
     "(length(CAST(n.text AS BLOB)) + COALESCE(length(CAST(n.locator_json AS BLOB)), 0) "
@@ -108,8 +58,17 @@ _CANDIDATE_LEAF_CELLS_SQL = (
     "WHERE r.extractor_name = ? AND n.node_kind = 'table_cell'"
 )
 
-_SELF_REFERENCED_NODE_IDS_SQL = (
-    "SELECT parent_node_id, supersedes_node_id FROM evidence_nodes "
+_CANDIDATE_SUBSTANTIVE_NODES_SQL = (
+    "SELECT n.extraction_run_id, n.node_id, "
+    "(length(CAST(n.text AS BLOB)) + COALESCE(length(CAST(n.locator_json AS BLOB)), 0) "
+    "+ length(CAST(n.node_id AS BLOB)) + length(CAST(n.evidence_key AS BLOB))) AS approx_bytes "
+    "FROM evidence_nodes AS n "
+    "JOIN evidence_extraction_runs AS r ON r.extraction_run_id = n.extraction_run_id "
+    "WHERE r.extractor_name = ? AND n.node_kind IN ('table_cell', 'table_row', 'table', 'passage')"
+)
+
+_SELF_LINK_EDGES_SQL = (
+    "SELECT node_id, parent_node_id, supersedes_node_id FROM evidence_nodes "
     "WHERE parent_node_id IS NOT NULL OR supersedes_node_id IS NOT NULL"
 )
 
@@ -118,6 +77,13 @@ _SELF_REFERENCED_NODE_IDS_SQL = (
 _POLYMORPHIC_PROCESSING_MEMBER_NODE_IDS_SQL = (
     "SELECT DISTINCT native_id FROM document_processing_evidence_members "
     "WHERE native_table = 'evidence_nodes' AND native_id IS NOT NULL"
+)
+
+# Runs sealed by fact_extraction_run_completeness_seals_v2 have their exact live
+# evidence_nodes ID set recomputed by integrity_audit._audit_fact_v2_extraction_seals.
+_SEALED_FACT_EXTRACTION_RUN_IDS_SQL = (
+    "SELECT DISTINCT extraction_run_id FROM fact_extraction_run_completeness_seals_v2 "
+    "WHERE extraction_run_id IS NOT NULL"
 )
 
 _FETCH_RUN_NODES_SQL = (
@@ -158,6 +124,7 @@ _FK_CHECK_SQL: dict[str, str] = {
     ),
     "expected_documents": "PRAGMA foreign_key_check(expected_documents)",
     "filing_sections": "PRAGMA foreign_key_check(filing_sections)",
+    "filing_section_items": "PRAGMA foreign_key_check(filing_section_items)",
     "legacy_fact_evidence_match_revisions": (
         "PRAGMA foreign_key_check(legacy_fact_evidence_match_revisions)"
     ),
@@ -212,6 +179,7 @@ class CompactionOptions:
     project_root: Path
     apply: bool = False
     batch_size: int = DEFAULT_BATCH_SIZE
+    archive_substantive_nodes: bool = False
     prune_index_member_coverage: bool = False
     prune_inactive_filing_sections: bool = False
     prune_unreferenced_legacy_matches: bool = False
@@ -357,7 +325,7 @@ def _check_table_foreign_keys(conn: sqlite3.Connection, table: str) -> None:
         raise RuntimeError(f"foreign-key verification failed on {table}: {tuple(violation)!r}")
 
 
-def _collect_referenced_evidence_node_ids(conn: sqlite3.Connection) -> set[str]:
+def _collect_external_protected_evidence_node_ids(conn: sqlite3.Connection) -> set[str]:
     tables = _existing_tables(conn)
     discovered = _discover_incoming_fk_refs(conn, "evidence_nodes")
     unregistered = discovered - set(_EVIDENCE_NODE_FK_QUERIES)
@@ -368,13 +336,6 @@ def _collect_referenced_evidence_node_ids(conn: sqlite3.Connection) -> set[str]:
         )
 
     referenced: set[str] = set()
-    # O(N) linear scan for self-referential parent/supersedes links (unindexed columns).
-    for row in conn.execute(_SELF_REFERENCED_NODE_IDS_SQL).fetchall():
-        if row[0] is not None:
-            referenced.add(str(row[0]))
-        if row[1] is not None:
-            referenced.add(str(row[1]))
-
     for (table_name, col_name), query_sql in _EVIDENCE_NODE_FK_QUERIES.items():
         if table_name not in tables or col_name not in _existing_columns(conn, table_name):
             continue
@@ -389,15 +350,29 @@ def _collect_referenced_evidence_node_ids(conn: sqlite3.Connection) -> set[str]:
     return referenced
 
 
-def _select_eligible_leaf_table_cells(
+def _collect_protected_extraction_run_ids(conn: sqlite3.Connection) -> set[str]:
+    tables = _existing_tables(conn)
+    if "fact_extraction_run_completeness_seals_v2" not in tables:
+        return set()
+    return {
+        str(row[0])
+        for row in conn.execute(_SEALED_FACT_EXTRACTION_RUN_IDS_SQL).fetchall()
+        if row[0] is not None
+    }
+
+
+def _select_eligible_evidence_nodes(
     conn: sqlite3.Connection,
-) -> tuple[dict[str, list[str]], int, int]:
-    """Return ({extraction_run_id: [node_id, ...]}, estimated_payload_bytes, already_archived_runs)."""
+    *,
+    archive_substantive_nodes: bool,
+) -> tuple[dict[str, list[str]], list[list[str]], int, int]:
+    """Return ({run_id: [leaf-to-root node_ids]}, ordered_run_groups, approx_bytes, archived_runs)."""
     tables = _existing_tables(conn)
     if not {"evidence_nodes", "evidence_extraction_runs"} <= tables:
-        return {}, 0, 0
+        return {}, [], 0, 0
 
-    referenced_node_ids = _collect_referenced_evidence_node_ids(conn)
+    external_protected_ids = _collect_external_protected_evidence_node_ids(conn)
+    protected_run_ids = _collect_protected_extraction_run_ids(conn)
     archived_runs: set[str] = set()
     if has_external_archives_table(conn):
         archived_runs = {
@@ -407,17 +382,25 @@ def _select_eligible_leaf_table_cells(
             ).fetchall()
         }
 
-    rows = conn.execute(_CANDIDATE_LEAF_CELLS_SQL, (_FULLTEXT_EXTRACTOR_NAME,)).fetchall()
-    by_run: dict[str, list[str]] = {}
-    estimated_bytes = 0
-    for row in rows:
-        run_id = str(row[0])
-        node_id = str(row[1])
-        if run_id in archived_runs or node_id in referenced_node_ids:
+    candidate_sql = (
+        _CANDIDATE_SUBSTANTIVE_NODES_SQL if archive_substantive_nodes else _CANDIDATE_LEAF_CELLS_SQL
+    )
+    candidates: dict[str, tuple[str, int]] = {}
+    for row in conn.execute(candidate_sql, (_FULLTEXT_EXTRACTOR_NAME,)).fetchall():
+        run_id, node_id = str(row[0]), str(row[1])
+        if run_id in protected_run_ids or node_id in external_protected_ids:
             continue
-        estimated_bytes += int(row[2] or 0)
-        by_run.setdefault(run_id, []).append(node_id)
-    return by_run, estimated_bytes, len(archived_runs)
+        if not archive_substantive_nodes and run_id in archived_runs:
+            continue
+        candidates[node_id] = (run_id, int(row[2] or 0))
+    if not candidates:
+        return {}, [], 0, len(archived_runs)
+
+    by_run, ordered_run_groups, estimated_bytes = peel_leaf_evidence_nodes(
+        candidates,
+        conn.execute(_SELF_LINK_EDGES_SQL).fetchall(),
+    )
+    return by_run, ordered_run_groups, estimated_bytes, len(archived_runs)
 
 
 def _fetch_run_nodes_by_ids(
@@ -438,41 +421,63 @@ def _fetch_run_nodes_by_ids(
 def _run_step_a(
     conn: sqlite3.Connection, options: CompactionOptions, log_event: EventLogger
 ) -> dict[str, object]:
-    by_run, estimated_bytes, already_archived_runs = _select_eligible_leaf_table_cells(conn)
+    by_run, ordered_run_groups, estimated_bytes, already_archived_runs = (
+        _select_eligible_evidence_nodes(
+            conn,
+            archive_substantive_nodes=options.archive_substantive_nodes,
+        )
+    )
     result: dict[str, object] = {
+        "archive_substantive_nodes": options.archive_substantive_nodes,
         "eligible_runs": len(by_run),
         "eligible_nodes": sum(len(ids) for ids in by_run.values()),
         "already_archived_runs": already_archived_runs,
         "estimated_payload_bytes": estimated_bytes,
         "archived_runs": 0,
+        "updated_archived_runs": 0,
         "archived_nodes": 0,
         "deleted_nodes": 0,
         "archive_bytes_written": 0,
     }
     if not options.apply or not by_run:
         return result
-
     if not has_external_archives_table(conn):
         raise RuntimeError(
             "evidence_node_external_archives table is missing; run `alembic upgrade head` first"
         )
 
-    archived_runs = archived_nodes = deleted_nodes = archive_bytes_written = 0
-    pending_receipts: list[tuple[str, str, str, int, str, str, str]] = []
+    archived_runs = updated_archived_runs = archived_nodes = deleted_nodes = 0
+    archive_bytes_written = 0
+    pending_inserts: list[tuple[str, str, str, int, str, str, str]] = []
+    pending_updates: list[tuple[str, int, str, str, str]] = []
     pending_node_ids: list[str] = []
 
     def _flush_pending_batch() -> None:
-        nonlocal archived_runs, archived_nodes, deleted_nodes
-        if not pending_receipts:
+        nonlocal archived_runs, updated_archived_runs, archived_nodes, deleted_nodes
+        if not pending_inserts and not pending_updates:
             return
         with _maintenance_transaction(conn, (_EVIDENCE_NODE_TRIGGER,), defer_fk_checks=True):
-            conn.executemany(
-                "INSERT INTO evidence_node_external_archives ("
-                "extraction_run_id, storage_relpath, archive_sha256, archived_node_count, "
-                "archived_node_kinds_json, original_output_sha256, archived_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
-                pending_receipts,
-            )
+            if pending_inserts:
+                conn.executemany(
+                    "INSERT INTO evidence_node_external_archives ("
+                    "extraction_run_id, storage_relpath, archive_sha256, archived_node_count, "
+                    "archived_node_kinds_json, original_output_sha256, archived_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    pending_inserts,
+                )
+            if pending_updates:
+                upd_cur = conn.executemany(
+                    "UPDATE evidence_node_external_archives "
+                    "SET archive_sha256 = ?, archived_node_count = ?, "
+                    "archived_node_kinds_json = ?, archived_at = ? "
+                    "WHERE extraction_run_id = ?",
+                    pending_updates,
+                )
+                if upd_cur.rowcount != len(pending_updates):
+                    raise RuntimeError(
+                        f"archive receipt update count mismatch for Step A batch: "
+                        f"expected {len(pending_updates)}, updated {upd_cur.rowcount}"
+                    )
             cur = conn.executemany(
                 "DELETE FROM evidence_nodes WHERE node_id = ?",
                 [(node_id,) for node_id in pending_node_ids],
@@ -482,67 +487,84 @@ def _run_step_a(
                     f"delete count mismatch for Step A batch: "
                     f"expected {len(pending_node_ids)}, deleted {cur.rowcount}"
                 )
-        batch_runs = len(pending_receipts)
+        batch_updates = len(pending_updates)
+        batch_runs = len(pending_inserts) + batch_updates
         batch_nodes = len(pending_node_ids)
         archived_runs += batch_runs
+        updated_archived_runs += batch_updates
         archived_nodes += batch_nodes
         deleted_nodes += batch_nodes
         log_event(
             "compact_evidence_batch_committed",
             batch_runs=batch_runs,
+            batch_updated_runs=batch_updates,
             batch_nodes=batch_nodes,
             total_archived_runs=archived_runs,
             total_archived_nodes=archived_nodes,
         )
-        pending_receipts.clear()
+        pending_inserts.clear()
+        pending_updates.clear()
         pending_node_ids.clear()
 
-    for extraction_run_id in sorted(by_run):
-        node_ids = by_run[extraction_run_id]
-        run_row = conn.execute(
-            "SELECT output_sha256 FROM evidence_extraction_runs WHERE extraction_run_id = ?",
-            (extraction_run_id,),
-        ).fetchone()
-        if run_row is None or not run_row[0]:
-            raise RuntimeError(
-                f"extraction run {extraction_run_id} is missing output_sha256 commitment"
+    for run_group in ordered_run_groups:
+        for extraction_run_id in run_group:
+            node_ids = by_run[extraction_run_id]
+            run_row = conn.execute(
+                "SELECT output_sha256 FROM evidence_extraction_runs WHERE extraction_run_id = ?",
+                (extraction_run_id,),
+            ).fetchone()
+            if run_row is None or not run_row[0]:
+                raise RuntimeError(
+                    f"extraction run {extraction_run_id} is missing output_sha256 commitment"
+                )
+            original_output_sha256 = str(run_row[0])
+            rows_to_archive = _fetch_run_nodes_by_ids(conn, extraction_run_id, node_ids)
+            if len(rows_to_archive) != len(node_ids):
+                raise RuntimeError(
+                    f"eligible node count drift for run {extraction_run_id}: "
+                    f"expected {len(node_ids)}, fetched {len(rows_to_archive)}"
+                )
+            artifact, is_update = merge_run_nodes_archive(
+                conn,
+                state_root=options.state_root,
+                extraction_run_id=extraction_run_id,
+                new_rows=rows_to_archive,
+                original_output_sha256=original_output_sha256,
             )
-        original_output_sha256 = str(run_row[0])
-
-        rows_to_archive = _fetch_run_nodes_by_ids(conn, extraction_run_id, node_ids)
-        if len(rows_to_archive) != len(node_ids):
-            raise RuntimeError(
-                f"eligible node count drift for run {extraction_run_id}: "
-                f"expected {len(node_ids)}, fetched {len(rows_to_archive)}"
-            )
-
-        # Write & verify archive on disk BEFORE queueing receipt+delete (crash-safe).
-        artifact = write_run_nodes_archive(options.state_root, extraction_run_id, rows_to_archive)
-        archived_at = datetime.now(UTC).isoformat()
-        kinds_json = json.dumps(list(artifact.archived_node_kinds), separators=(",", ":"))
-        archive_bytes_written += artifact.archive_path.stat().st_size
-
-        pending_receipts.append(
-            (
-                extraction_run_id,
-                artifact.storage_relpath,
-                artifact.archive_sha256,
-                artifact.archived_node_count,
-                kinds_json,
-                original_output_sha256,
-                archived_at,
-            )
-        )
-        pending_node_ids.extend(node_ids)
+            archived_at = datetime.now(UTC).isoformat()
+            kinds_json = json.dumps(list(artifact.archived_node_kinds), separators=(",", ":"))
+            archive_bytes_written += artifact.archive_path.stat().st_size
+            if is_update:
+                pending_updates.append(
+                    (
+                        artifact.archive_sha256,
+                        artifact.archived_node_count,
+                        kinds_json,
+                        archived_at,
+                        extraction_run_id,
+                    )
+                )
+            else:
+                pending_inserts.append(
+                    (
+                        extraction_run_id,
+                        artifact.storage_relpath,
+                        artifact.archive_sha256,
+                        artifact.archived_node_count,
+                        kinds_json,
+                        original_output_sha256,
+                        archived_at,
+                    )
+                )
+            pending_node_ids.extend(node_ids)
         if len(pending_node_ids) >= options.batch_size:
             _flush_pending_batch()
 
     _flush_pending_batch()
-
     _check_table_foreign_keys(conn, "evidence_nodes")
     _check_table_foreign_keys(conn, "evidence_node_external_archives")
-
     result["archived_runs"] = archived_runs
+    result["updated_archived_runs"] = updated_archived_runs
     result["archived_nodes"] = archived_nodes
     result["deleted_nodes"] = deleted_nodes
     result["archive_bytes_written"] = archive_bytes_written
@@ -880,6 +902,8 @@ def _run_step_b_filing_sections(
         conn.isolation_level = prev_isolation
 
     _check_table_foreign_keys(conn, "filing_sections")
+    if "filing_section_items" in tables:
+        _check_table_foreign_keys(conn, "filing_section_items")
     result["deleted_rows"] = deleted
     log_event("compact_filing_sections_pruned", deleted_rows=deleted)
     return result

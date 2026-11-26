@@ -26,6 +26,10 @@ from models.facts import FactLocator, LocatorKind, SpreadsheetCellRef
 from pipeline.kpi_legacy_disposition_capture import captured_legacy_quarantine_matches
 from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
 from provenance.evidence_ledger import EvidenceLocator, OfficeObjectKind
+from provenance.evidence_node_store import (
+    load_substantive_run_nodes_for_review,
+    resolve_state_root_for_connection,
+)
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.fulltext_extractor_identity import (
     resolve_fulltext_extractor_identity,
@@ -465,6 +469,7 @@ def _evidence_state_and_candidates(
     value: str,
     unit: str,
     snapshot_cache: dict[int, _EvidenceDocumentSnapshot],
+    state_root: Path | None = None,
 ) -> tuple[
     KpiSemanticReviewState,
     tuple[KpiEvidenceCandidate, ...],
@@ -611,31 +616,22 @@ def _evidence_state_and_candidates(
         )
     snapshot = snapshot_cache.get(source_doc_id)
     if snapshot is None:
-        kind_marks = ",".join("?" for _ in _SUBSTANTIVE_NODE_KINDS)
-        rows = conn.execute(
-            "SELECT node.node_id,node.node_kind,node.locator_json,node.locator_sha256,"  # nosec B608 -- SQL shape and placeholder counts come only from closed internal sets; all values remain bound
-            "substr(node.text,1,?) AS bounded_text,length(node.text) AS text_length,"
-            "node.extraction_run_id,run.document_version_id FROM evidence_nodes node "
-            "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
-            "WHERE node.extraction_run_id=? "
-            f"AND node.node_kind IN ({kind_marks}) "
-            "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
-            "WHERE newer.supersedes_node_id=node.node_id "
-            "AND newer.extraction_run_id=node.extraction_run_id) ORDER BY node.node_id LIMIT ?",
-            (
-                MAX_EVIDENCE_TEXT_CHARS_PER_NODE + 1,
-                selected_run_id,
-                *sorted(_SUBSTANTIVE_NODE_KINDS),
-                MAX_EVIDENCE_NODES_PER_DOCUMENT + 1,
-            ),
-        ).fetchall()
+        raw_rows = load_substantive_run_nodes_for_review(
+            conn,
+            selected_run_id,
+            document_version_id=str(binding["document_version_id"]),
+            substantive_kinds=_SUBSTANTIVE_NODE_KINDS,
+            max_text_chars_per_node=MAX_EVIDENCE_TEXT_CHARS_PER_NODE,
+            max_nodes=MAX_EVIDENCE_NODES_PER_DOCUMENT,
+            state_root=state_root,
+        )
         search_reasons: set[str] = set()
-        if len(rows) > MAX_EVIDENCE_NODES_PER_DOCUMENT:
+        if len(raw_rows) > MAX_EVIDENCE_NODES_PER_DOCUMENT:
             search_reasons.add("evidence_node_search_budget_exceeded")
         remaining_chars = MAX_EVIDENCE_TEXT_CHARS_PER_DOCUMENT
         nodes: list[_EvidenceNodeSnapshot] = []
-        for row in rows[:MAX_EVIDENCE_NODES_PER_DOCUMENT]:
-            locator_json = row["locator_json"]
+        for row in raw_rows[:MAX_EVIDENCE_NODES_PER_DOCUMENT]:
+            locator_json = row.get("locator_json")
             if locator_json is None:
                 search_reasons.add("evidence_node_locator_invalid")
                 continue
@@ -644,7 +640,7 @@ def _evidence_state_and_candidates(
             except ValueError:
                 search_reasons.add("evidence_node_locator_invalid")
                 continue
-            locator_sha256 = str(row["locator_sha256"] or "")
+            locator_sha256 = str(row.get("locator_sha256") or "")
             if (
                 str(locator_json) != locator.canonical_json
                 or locator_sha256 != locator.canonical_sha256
@@ -656,13 +652,15 @@ def _evidence_state_and_candidates(
             except ValueError:
                 search_reasons.add("evidence_node_locator_not_export_safe")
                 continue
-            bounded_text = str(row["bounded_text"] or "")
+            bounded_text = str(row.get("bounded_text") or "")
             allowed_chars = min(
                 len(bounded_text),
                 MAX_EVIDENCE_TEXT_CHARS_PER_NODE,
                 max(remaining_chars, 0),
             )
-            if int(row["text_length"] or 0) > allowed_chars:
+            raw_len = row.get("text_length")
+            text_length = raw_len if isinstance(raw_len, int) else 0
+            if text_length > allowed_chars:
                 search_reasons.add("evidence_text_search_budget_exceeded")
             if allowed_chars <= 0:
                 search_reasons.add("evidence_text_search_budget_exceeded")
@@ -773,6 +771,7 @@ def build_kpi_semantic_review_batch(
     limit: int = 250,
     observed_at: datetime | None = None,
     after_fact_id: int | None = None,
+    state_root: Path | None = None,
 ) -> KpiSemanticReviewBatch:
     """Return one bounded queue, optionally keyset-paged by current fact ID.
 
@@ -832,6 +831,9 @@ def build_kpi_semantic_review_batch(
         truncated = len(rows) > limit
         built: list[KpiSemanticReviewItem] = []
         snapshot_cache: dict[int, _EvidenceDocumentSnapshot] = {}
+        effective_state_root = resolve_state_root_for_connection(
+            conn, state_root=state_root, repo_root=repo_root
+        )
         for row in rows[: limit + 1]:
             if len(built) >= limit:
                 break
@@ -856,6 +858,7 @@ def build_kpi_semantic_review_batch(
                 value=str(row["value"]),
                 unit=str(row["unit"]),
                 snapshot_cache=snapshot_cache,
+                state_root=effective_state_root,
             )
             built.append(
                 KpiSemanticReviewItem(
@@ -925,6 +928,7 @@ def build_quarantined_kpi_correction_review(
     fact_id: int,
     source_value_text: str,
     observed_at: datetime | None = None,
+    state_root: Path | None = None,
 ) -> KpiSemanticReviewBatch:
     """Review one noncanonical legacy predecessor against an independent source token."""
 
@@ -976,6 +980,9 @@ def build_quarantined_kpi_correction_review(
     legacy, source = _source_document(
         conn, None if row["source_doc_id"] is None else int(row["source_doc_id"])
     )
+    effective_state_root = resolve_state_root_for_connection(
+        conn, state_root=state_root, repo_root=repo_root
+    )
     (
         state,
         candidates,
@@ -994,6 +1001,7 @@ def build_quarantined_kpi_correction_review(
         value=correction_token,
         unit=str(row["unit"]),
         snapshot_cache={},
+        state_root=effective_state_root,
     )
     if state is KpiSemanticReviewState.SOURCE_REVIEW_REQUIRED:
         state_reason = "quarantined_predecessor_exact_numeric_evidence_candidates"

@@ -181,7 +181,7 @@ def test_migration_0072_table_constraints_downgrade_and_reupgrade(
     db_path = migrated_db(tmp_path / "mig0072.db")
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER) as conn:
         row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert row is not None and tuple(row) == ("0072_evidence_node_external_archives",)
+        assert row is not None and tuple(row) == ("0073_drop_redundant_indexes",)
         run_id, output_sha = _seed_run_with_nodes(conn)
 
         # Reject path traversal, absolute path, bad sha, count <= 0, non-array kinds.
@@ -467,3 +467,65 @@ def test_source_viewer_handles_external_archives_safely(
     # With corrupted archive + explicit state_root: fails closed cleanly (returns None).
     artifact.archive_path.write_bytes(b"not-gzip")
     assert load_document_version(db_path, "doc-arch-1", state_root=state_root) is None
+
+
+def test_migration_0073_drops_redundant_indexes_reversibly_and_preserves_audited_indexes(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    import importlib.util
+
+    mig_path = PROJECT_ROOT / "alembic" / "versions" / "0073_drop_redundant_indexes.py"
+    mod_source = mig_path.read_text(encoding="utf-8")
+    assert "foreign_key_check" not in mod_source
+
+    spec = importlib.util.spec_from_file_location("mig_0073", mig_path)
+    assert spec is not None and spec.loader is not None
+    mig_0073 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig_0073)
+    redundant_specs: tuple[tuple[str, str], ...] = getattr(mig_0073, "_REDUNDANT_INDEXES")
+    dropped_names = {name for name, _ in redundant_specs}
+    assert {
+        "ix_evidence_nodes_key_revision",
+        "ix_source_coverage_expected_revision",
+        "ix_expected_document_lifecycle_current",
+        "ix_filing_section_items_section",
+        "idx_financial_facts_restatement_lookup",
+    } <= dropped_names
+
+    db_path = migrated_db(tmp_path / "mig0073.db")
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0073_drop_redundant_indexes",
+        )
+        head_indexes = {
+            str(r[0])
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'").fetchall()
+        }
+        # All redundant indexes are dropped at head.
+        assert head_indexes.isdisjoint(dropped_names)
+        # Integrity-audited indexes MUST remain live.
+        assert "ix_fact_resolution_revisions_v2_current" in head_indexes
+        assert "ix_fact_derivation_edges_v2_output" in head_indexes
+
+    # Downgrade to 0072 restores every dropped index cleanly.
+    cfg = _alembic_config(db_path)
+    command.downgrade(cfg, "0072_evidence_node_external_archives")
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0072_evidence_node_external_archives",
+        )
+        restored_indexes = {
+            str(r[0])
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'").fetchall()
+        }
+        assert dropped_names <= restored_indexes
+        # Verify every recreated index matches the exact DROP-then-recreate reversibility contract.
+        for name, _ in redundant_specs:
+            conn.execute(f"DROP INDEX IF EXISTS {name}")
+        re_dropped = {
+            str(r[0])
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'").fetchall()
+        }
+        assert re_dropped.isdisjoint(dropped_names)
+        assert "ix_fact_resolution_revisions_v2_current" in re_dropped
+        assert "ix_fact_derivation_edges_v2_output" in re_dropped

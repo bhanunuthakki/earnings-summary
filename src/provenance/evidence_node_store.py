@@ -22,13 +22,87 @@ import sqlite3
 import stat
 import tempfile
 import zlib
-from collections.abc import Mapping, Sequence
+from collections import deque
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from db_paths import default_product_state_root
+
 ARCHIVE_DIR_RELPATH = Path("data") / "derived_evidence"
+
+_LOAD_LIVE_RUN_NODES_SQL = (
+    "SELECT node_id, evidence_key, revision, extraction_run_id, parent_node_id, "
+    "supersedes_node_id, node_kind, text, locator_json, locator_sha256, recorded_at "
+    "FROM evidence_nodes WHERE extraction_run_id = ? ORDER BY node_id"
+)
+_LOAD_LIVE_RUN_NODES_LIMIT_SQL = _LOAD_LIVE_RUN_NODES_SQL + " LIMIT ?"
+_LOAD_LIVE_RUN_NODES_MINIMAL_SQL = (
+    "SELECT node_id, extraction_run_id, supersedes_node_id, node_kind, text, "
+    "locator_json, locator_sha256 "
+    "FROM evidence_nodes WHERE extraction_run_id = ? ORDER BY node_id"
+)
+_LOAD_LIVE_RUN_NODES_MINIMAL_LIMIT_SQL = _LOAD_LIVE_RUN_NODES_MINIMAL_SQL + " LIMIT ?"
+
+EVIDENCE_NODE_FK_QUERIES: dict[tuple[str, str], str] = {
+    ("canonical_fact_projection_entries", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM canonical_fact_projection_entries "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("fact_observations_v2", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM fact_observations_v2 "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("fact_selection_decisions", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM fact_selection_decisions "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("filing_xbrl_raw_fact_commitments", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM filing_xbrl_raw_fact_commitments "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("image_ocr_results", "node_id"): (
+        "SELECT DISTINCT node_id FROM image_ocr_results WHERE node_id IS NOT NULL"
+    ),
+    ("latest_governed_narrative_entries", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM latest_governed_narrative_entries "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("legacy_document_evidence_binding_revisions", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM legacy_document_evidence_binding_revisions "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("legacy_fact_evidence_match_revisions", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM legacy_fact_evidence_match_revisions "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("ocr_page_results", "node_id"): (
+        "SELECT DISTINCT node_id FROM ocr_page_results WHERE node_id IS NOT NULL"
+    ),
+    ("reported_observations", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM reported_observations "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("search_chunks", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM search_chunks WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("kpi_definition_revisions", "source_evidence_node_id"): (
+        "SELECT DISTINCT source_evidence_node_id FROM kpi_definition_revisions "
+        "WHERE source_evidence_node_id IS NOT NULL"
+    ),
+    ("kpi_definition_comparability_revisions", "source_evidence_node_id"): (
+        "SELECT DISTINCT source_evidence_node_id FROM kpi_definition_comparability_revisions "
+        "WHERE source_evidence_node_id IS NOT NULL"
+    ),
+}
+_LOAD_LIVE_RUN_NODES_ROWID_SQL = (
+    "SELECT rowid AS native_rowid, node_id, evidence_key, revision, extraction_run_id, "
+    "parent_node_id, supersedes_node_id, node_kind, text, locator_json, locator_sha256, "
+    "recorded_at FROM evidence_nodes WHERE extraction_run_id = ? ORDER BY native_rowid"
+)
+_LOAD_LIVE_RUN_NODES_ROWID_LIMIT_SQL = _LOAD_LIVE_RUN_NODES_ROWID_SQL + " LIMIT ?"
 
 _EVIDENCE_NODE_COLUMNS: tuple[str, ...] = (
     "node_id",
@@ -465,6 +539,42 @@ def load_archived_run_nodes(
     return verify_archive_receipt(state_root, receipt)
 
 
+def archive_receipt_has_substantive_kinds(receipt: ExternalArchiveReceipt) -> bool:
+    """Return True when the archive receipt records at least one non-``document`` kind."""
+    return any(kind != "document" for kind in receipt.archived_node_kinds)
+
+
+def resolve_state_root_for_connection(
+    conn: sqlite3.Connection,
+    *,
+    state_root: Path | None = None,
+    repo_root: Path | None = None,
+) -> Path | None:
+    """Resolve an explicit or DB-derived product state root for external archives."""
+    if state_root is not None:
+        return state_root
+    db_file = ""
+    for row in conn.execute("PRAGMA database_list").fetchall():
+        if str(row[1]) == "main":
+            db_file = str(row[2] or "")
+            break
+    if db_file and db_file != ":memory:":
+        db_path = Path(db_file)
+        if db_path.parent.name.casefold() == "data":
+            candidate = db_path.parent.parent.resolve()
+            if (candidate / ARCHIVE_DIR_RELPATH).is_dir() or (
+                db_path.name.casefold() == "portfolio.db"
+            ):
+                return candidate
+        if (db_path.parent / ARCHIVE_DIR_RELPATH).is_dir():
+            return db_path.parent.resolve()
+        if repo_root is not None:
+            return default_product_state_root(repo_root, db_path=db_path)
+    if repo_root is not None:
+        return default_product_state_root(repo_root)
+    return None
+
+
 def resolve_state_root_from_roots(
     state_root: Path | None,
     candidate_roots: Sequence[Path],
@@ -480,6 +590,38 @@ def resolve_state_root_from_roots(
     return None
 
 
+def _fetch_live_run_nodes(
+    conn: sqlite3.Connection,
+    extraction_run_id: str,
+    *,
+    include_rowid: bool,
+    limit: int | None,
+) -> list[dict[str, object]]:
+    try:
+        if include_rowid:
+            if limit is not None:
+                cursor = conn.execute(
+                    _LOAD_LIVE_RUN_NODES_ROWID_LIMIT_SQL, (extraction_run_id, limit)
+                )
+            else:
+                cursor = conn.execute(_LOAD_LIVE_RUN_NODES_ROWID_SQL, (extraction_run_id,))
+        elif limit is not None:
+            cursor = conn.execute(_LOAD_LIVE_RUN_NODES_LIMIT_SQL, (extraction_run_id, limit))
+        else:
+            cursor = conn.execute(_LOAD_LIVE_RUN_NODES_SQL, (extraction_run_id,))
+    except sqlite3.OperationalError as exc:
+        if include_rowid or "no such column" not in str(exc).lower():
+            raise
+        if limit is not None:
+            cursor = conn.execute(
+                _LOAD_LIVE_RUN_NODES_MINIMAL_LIMIT_SQL, (extraction_run_id, limit)
+            )
+        else:
+            cursor = conn.execute(_LOAD_LIVE_RUN_NODES_MINIMAL_SQL, (extraction_run_id,))
+    names = tuple(item[0] for item in cursor.description or ())
+    return [dict(zip(names, tuple(row), strict=True)) for row in cursor.fetchall()]
+
+
 def load_run_nodes(
     conn: sqlite3.Connection,
     extraction_run_id: str,
@@ -493,43 +635,50 @@ def load_run_nodes(
 
     Results are returned in deterministic ``node_id`` order by default, or in
     original insertion order (``native_rowid``) when ``include_rowid=True`` and
-    every merged row carries an integer ``native_rowid``.
+    every merged row carries an integer ``native_rowid``. When a node exists in
+    both SQLite (e.g. rehydrated for indexing) and the external archive, it is
+    deduplicated by ``node_id`` preferring the live SQLite row while preserving
+    the original pre-compaction ``native_rowid`` when ``include_rowid=True``.
     """
-    columns = (
-        ("rowid AS native_rowid", *_EVIDENCE_NODE_COLUMNS)
-        if include_rowid
-        else _EVIDENCE_NODE_COLUMNS
-    )
-    order_col = "native_rowid" if include_rowid else "node_id"
-    select_list = ", ".join(columns)
-    params: list[object] = [extraction_run_id]
-    limit_clause = ""
-    if limit is not None:
-        limit_clause = " LIMIT ?"
-        params.append(limit)
-    cursor = conn.execute(
-        f"SELECT {select_list} FROM evidence_nodes WHERE extraction_run_id = ? "  # nosec B608 -- fixed column/order constants; bound params
-        f"ORDER BY {order_col}{limit_clause}",
-        tuple(params),
-    )
-    names = tuple(item[0] for item in cursor.description or ())
-    live_rows = [dict(zip(names, tuple(row), strict=True)) for row in cursor.fetchall()]
+    receipt = archive_receipt_for_run(conn, extraction_run_id) if include_external else None
+    if receipt is None:
+        return _fetch_live_run_nodes(
+            conn,
+            extraction_run_id,
+            include_rowid=include_rowid,
+            limit=limit,
+        )
 
-    if not include_external:
-        return live_rows
+    if state_root is None:
+        raise EvidenceArchiveError(
+            f"state_root is required to read external archive for extraction run {extraction_run_id}"
+        )
 
-    archived_rows = load_archived_run_nodes(conn, extraction_run_id, state_root=state_root)
-    if not archived_rows:
-        return live_rows
+    live_rows = _fetch_live_run_nodes(
+        conn,
+        extraction_run_id,
+        include_rowid=include_rowid,
+        limit=None,
+    )
+    archived_rows = verify_archive_receipt(state_root, receipt)
 
     merged_by_id: dict[str, dict[str, object]] = {}
+    archived_rowids: dict[str, int] = {}
     for row in archived_rows:
         row_copy = dict(row)
+        node_id = str(row_copy["node_id"])
+        raw_rowid = row_copy.get("native_rowid")
+        if isinstance(raw_rowid, int) and not isinstance(raw_rowid, bool):
+            archived_rowids[node_id] = raw_rowid
         if not include_rowid:
             row_copy.pop("native_rowid", None)
-        merged_by_id[str(row_copy["node_id"])] = row_copy
+        merged_by_id[node_id] = row_copy
     for row in live_rows:
-        merged_by_id[str(row["node_id"])] = row
+        node_id = str(row["node_id"])
+        merged_row = dict(row)
+        if include_rowid and node_id in archived_rowids:
+            merged_row["native_rowid"] = archived_rowids[node_id]
+        merged_by_id[node_id] = merged_row
 
     merged = list(merged_by_id.values())
     if include_rowid and all(
@@ -545,19 +694,205 @@ def load_run_nodes(
     return merged
 
 
+def merge_run_nodes_archive(
+    conn: sqlite3.Connection,
+    *,
+    state_root: Path,
+    extraction_run_id: str,
+    new_rows: Sequence[Mapping[str, object]],
+    original_output_sha256: str,
+) -> tuple[ArchivedRunArtifact, bool]:
+    """Write a new archive or merge ``new_rows`` into an existing verified run archive.
+
+    Returns ``(artifact, is_update)``. Fails closed if an existing archive receipt
+    disagrees on ``original_output_sha256`` or if any ``node_id`` duplicates an
+    already-archived row.
+    """
+    existing_receipt = archive_receipt_for_run(conn, extraction_run_id)
+    if existing_receipt is None:
+        artifact = write_run_nodes_archive(state_root, extraction_run_id, new_rows)
+        return artifact, False
+    if existing_receipt.original_output_sha256 != original_output_sha256:
+        raise EvidenceArchiveError(
+            f"existing archive receipt original_output_sha256 mismatch for run {extraction_run_id}"
+        )
+    existing_rows = load_archived_run_nodes(conn, extraction_run_id, state_root=state_root)
+    combined_rows: list[Mapping[str, object]] = [dict(row) for row in existing_rows]
+    combined_rows.extend(new_rows)
+    artifact = write_run_nodes_archive(state_root, extraction_run_id, combined_rows)
+    return artifact, True
+
+
+def order_compaction_run_groups(
+    run_ids: set[str],
+    cross_run_edges: set[tuple[str, str]],
+) -> list[list[str]]:
+    """Order runs so child/successor runs commit deletes before parent/predecessor runs."""
+    in_degree: dict[str, int] = dict.fromkeys(run_ids, 0)
+    dependents: dict[str, list[str]] = {}
+    for src_run, dst_run in sorted(cross_run_edges):
+        if src_run == dst_run or src_run not in in_degree or dst_run not in in_degree:
+            continue
+        in_degree[dst_run] += 1
+        dependents.setdefault(src_run, []).append(dst_run)
+    queue: deque[str] = deque(sorted(rid for rid, deg in in_degree.items() if deg == 0))
+    groups: list[list[str]] = []
+    emitted: set[str] = set()
+    while queue:
+        rid = queue.popleft()
+        groups.append([rid])
+        emitted.add(rid)
+        newly_ready: list[str] = []
+        for dst in dependents.get(rid, ()):
+            in_degree[dst] -= 1
+            if in_degree[dst] == 0:
+                newly_ready.append(dst)
+        for dst in sorted(newly_ready):
+            queue.append(dst)
+    remaining = sorted(run_ids - emitted)
+    if remaining:
+        groups.append(remaining)
+    return groups
+
+
+def peel_leaf_evidence_nodes(
+    candidates: Mapping[str, tuple[str, int]],
+    self_link_rows: Iterable[Sequence[object]],
+) -> tuple[dict[str, list[str]], list[list[str]], int]:
+    """O(N) bottom-up Kahn leaf peel over ``parent_node_id`` and ``supersedes_node_id``."""
+    live_child_count: dict[str, int] = dict.fromkeys(candidates, 0)
+    cand_targets: dict[str, list[str]] = {}
+    for row in self_link_rows:
+        src_id = str(row[0])
+        parent_raw, supersedes_raw = row[1], row[2]
+        if parent_raw is not None and supersedes_raw is not None:
+            p_str, s_str = str(parent_raw), str(supersedes_raw)
+            targets: tuple[str, ...] = (p_str,) if p_str == s_str else (p_str, s_str)
+        elif parent_raw is not None:
+            targets = (str(parent_raw),)
+        elif supersedes_raw is not None:
+            targets = (str(supersedes_raw),)
+        else:
+            continue
+        src_is_candidate = src_id in candidates
+        for target in targets:
+            if target in candidates:
+                live_child_count[target] += 1
+                if src_is_candidate and src_id != target:
+                    cand_targets.setdefault(src_id, []).append(target)
+
+    queue: deque[str] = deque(sorted(nid for nid, count in live_child_count.items() if count == 0))
+    peeled_set: set[str] = set()
+    by_run: dict[str, list[str]] = {}
+    estimated_bytes = 0
+    while queue:
+        nid = queue.popleft()
+        peeled_set.add(nid)
+        run_id, approx_bytes = candidates[nid]
+        by_run.setdefault(run_id, []).append(nid)
+        estimated_bytes += approx_bytes
+        for target in cand_targets.get(nid, ()):
+            live_child_count[target] -= 1
+            if live_child_count[target] == 0:
+                queue.append(target)
+    if not by_run:
+        return {}, [], 0
+
+    cross_run_edges: set[tuple[str, str]] = {
+        (candidates[src_id][0], candidates[target][0])
+        for src_id in peeled_set
+        for target in cand_targets.get(src_id, ())
+        if target in peeled_set and candidates[src_id][0] != candidates[target][0]
+    }
+    return by_run, order_compaction_run_groups(set(by_run), cross_run_edges), estimated_bytes
+
+
+def load_substantive_run_nodes_for_review(
+    conn: sqlite3.Connection,
+    extraction_run_id: str,
+    *,
+    document_version_id: str,
+    substantive_kinds: frozenset[str],
+    max_text_chars_per_node: int,
+    max_nodes: int,
+    state_root: Path | None = None,
+) -> list[dict[str, object]]:
+    """Load bounded non-superseded substantive nodes for KPI review from live or archived storage."""
+    if archive_receipt_for_run(conn, extraction_run_id) is not None:
+        run_nodes = load_run_nodes(conn, extraction_run_id, state_root=state_root)
+        superseded_ids = {
+            str(node["supersedes_node_id"])
+            for node in run_nodes
+            if node.get("supersedes_node_id") is not None
+        }
+        return [
+            {
+                "node_id": str(node["node_id"]),
+                "node_kind": str(node["node_kind"]),
+                "locator_json": node.get("locator_json"),
+                "locator_sha256": node.get("locator_sha256"),
+                "bounded_text": str(node.get("text") or "")[: max_text_chars_per_node + 1],
+                "text_length": len(str(node.get("text") or "")),
+                "extraction_run_id": str(node["extraction_run_id"]),
+                "document_version_id": document_version_id,
+            }
+            for node in run_nodes
+            if str(node["node_kind"]) in substantive_kinds
+            and str(node["node_id"]) not in superseded_ids
+        ][: max_nodes + 1]
+
+    sql_rows = conn.execute(
+        "SELECT node.node_id,node.node_kind,node.locator_json,node.locator_sha256,"
+        "substr(node.text,1,?) AS bounded_text,length(node.text) AS text_length,"
+        "node.extraction_run_id,run.document_version_id FROM evidence_nodes node "
+        "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
+        "WHERE node.extraction_run_id=? "
+        "AND node.node_kind IN (SELECT value FROM json_each(?)) "
+        "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
+        "WHERE newer.supersedes_node_id=node.node_id "
+        "AND newer.extraction_run_id=node.extraction_run_id) ORDER BY node.node_id LIMIT ?",
+        (
+            max_text_chars_per_node + 1,
+            extraction_run_id,
+            json.dumps(sorted(substantive_kinds)),
+            max_nodes + 1,
+        ),
+    ).fetchall()
+    return [
+        {
+            "node_id": row[0],
+            "node_kind": row[1],
+            "locator_json": row[2],
+            "locator_sha256": row[3],
+            "bounded_text": row[4],
+            "text_length": row[5],
+            "extraction_run_id": row[6],
+            "document_version_id": row[7],
+        }
+        for row in sql_rows
+    ]
+
+
 __all__ = [
     "ARCHIVE_DIR_RELPATH",
+    "EVIDENCE_NODE_FK_QUERIES",
     "ArchivedRunArtifact",
     "EvidenceArchiveError",
     "ExternalArchiveReceipt",
     "archive_receipt_for_run",
+    "archive_receipt_has_substantive_kinds",
     "archive_receipts_for_document_version",
     "archive_relpath_for_run",
     "has_external_archives_table",
     "load_archived_run_nodes",
     "load_document_version_external_archives",
     "load_run_nodes",
+    "load_substantive_run_nodes_for_review",
+    "merge_run_nodes_archive",
+    "order_compaction_run_groups",
+    "peel_leaf_evidence_nodes",
     "resolve_archive_path",
+    "resolve_state_root_for_connection",
     "resolve_state_root_from_roots",
     "validate_archive_relpath",
     "verify_archive_receipt",

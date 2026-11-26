@@ -78,6 +78,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Bounded delete batch size (default: {DEFAULT_BATCH_SIZE})",
     )
     parser.add_argument(
+        "--archive-substantive-nodes",
+        action="store_true",
+        help=(
+            "Also externalize unreferenced fulltext-evidence-backfill table_row, table, "
+            "and passage nodes (with bottom-up leaf peel and merge into existing archives)"
+        ),
+    )
+    parser.add_argument(
         "--prune-index-member-coverage",
         action="store_true",
         help="Prune expected_documents coverage chains for strictly index_member-only issuers",
@@ -122,6 +130,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             project_root=PROJECT_ROOT,
             apply=bool(args.apply),
             batch_size=int(args.batch_size),
+            archive_substantive_nodes=bool(args.archive_substantive_nodes),
             prune_index_member_coverage=bool(args.prune_index_member_coverage),
             prune_inactive_filing_sections=bool(args.prune_inactive_filing_sections),
             prune_unreferenced_legacy_matches=bool(args.prune_unreferenced_legacy_matches),
