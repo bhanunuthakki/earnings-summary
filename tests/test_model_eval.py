@@ -26,10 +26,13 @@ from llm.model_eval import (
     decide_switch,
 )
 
+HAIKU55 = "claude-haiku-5-5"
 HAIKU = "claude-haiku-4-5-20251001"
 HAIKU_ALIAS = "claude-haiku-4-5"  # rolling alias, registered 2026-07 as an eval candidate
+SONNET55 = "claude-sonnet-5-5"
 SONNET = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"  # registered 2026-07 as an eval candidate for SONNET
+OPUS55 = "claude-opus-5-5"
 OPUS = "claude-opus-4-8"
 GFLASH = "gemini-2.5-flash"
 GFLASH_LITE = "gemini-3.5-flash-lite"
@@ -73,6 +76,8 @@ def test_is_cheaper_unknown_model() -> None:
 def test_cheaper_candidates_sonnet() -> None:
     cands = model_ladder.cheaper_candidates(SONNET)
     assert set(cands) == {
+        HAIKU55,
+        SONNET55,
         GFLASH_LITE,
         GFLASH3,
         GPRO,
@@ -83,30 +88,36 @@ def test_cheaper_candidates_sonnet() -> None:
         SONNET5,
     }
     assert GFLASH not in cands  # retired from active candidate selection
-    # Cheapest-first; current list pricing makes Gemini Pro the priciest
-    # candidate still below the incumbent Sonnet 4.6.
-    assert set(cands[:2]) == {GFLASH_LITE, GFLASH3}
+    # Cheapest-first; claude-haiku-5-5 ($0.10/$0.50) leads, followed by Flash tiers,
+    # with Gemini Pro the priciest candidate still below Sonnet 4.6.
+    assert cands[0] == HAIKU55
+    assert set(cands[1:3]) == {GFLASH_LITE, GFLASH3}
     assert cands[-1] == GPRO
     assert G4NEON not in cands  # equal blended price ($4.71), not cheaper
     assert OPUS not in cands  # opus is dearer, not a downgrade
 
 
-def test_cheaper_candidates_haiku_has_only_gemini() -> None:
+def test_cheaper_candidates_haiku() -> None:
     cands = model_ladder.cheaper_candidates(HAIKU)
     assert set(cands) == {
+        HAIKU55,
         GFLASH_LITE,
         GFLASH3,
-    }  # active cheaper Gemini ids; retired GFLASH excluded
+    }  # Haiku 5.5 + active cheaper Gemini ids; retired GFLASH excluded
     assert GFLASH not in cands
-    assert model_ladder.cheaper_candidates(HAIKU, include_gemini=False) == []
+    assert model_ladder.cheaper_candidates(HAIKU, include_gemini=False) == [HAIKU55]
+    assert model_ladder.cheaper_candidates(HAIKU55, include_gemini=False) == []
 
 
 def test_cheaper_candidates_opus_same_family() -> None:
     assert model_ladder.cheaper_candidates(OPUS, include_gemini=False) == [
+        HAIKU55,
         HAIKU,
         HAIKU_ALIAS,
         SONNET5,
+        SONNET55,
         SONNET,
+        OPUS55,
     ]
 
 

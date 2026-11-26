@@ -130,6 +130,7 @@ def test_scheduled_runs_use_gemini_neon_and_claude_cross_family_judges() -> None
     assert CODEX not in DEFAULT_JUDGES
     assert DEFAULT_JUDGES == (GEMINI, CLAUDE)
     assert JUDGE_POOL[GEMINI] == "gemini-4-neon"
+    assert JUDGE_POOL[CLAUDE] == "claude-opus-5-5"
     assert set(DEFAULT_JUDGES) <= set(JUDGE_POOL)
     # Cross-family by construction: not all one vendor.
     assert len(set(DEFAULT_JUDGES)) >= 2

@@ -581,7 +581,7 @@ LLM_MODELS: dict[str, str] = {
     # contestants (Sonnet-tier Claude, Gemini Pro), and the corpus is tiny + run
     # off the hot path, so the judgment-tier cost is immaterial. The Gemini-side
     # judge resolves to Pro via gemini_model_for (not a fast-classifier purpose).
-    "backend_compare_judge": "claude-opus-4-8",
+    "backend_compare_judge": "claude-opus-5-5",
     # Bear-case outcome grading (src/bear_case_grader.py): judges whether a
     # past failure-mode hypothesis materialized against realized KPI data —
     # a judgment call over a small evidence table, run weekly per due
@@ -777,12 +777,16 @@ class LLMSetupError(RuntimeError):
 
 
 _CODEX_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
+    "claude-haiku-5-5": _CODEX_FAST_MODEL,
     "claude-haiku-4-5-20251001": _CODEX_FAST_MODEL,
     "claude-haiku-4-5": _CODEX_FAST_MODEL,
+    "claude-sonnet-5-5": _CODEX_DEFAULT_MODEL,
     "claude-sonnet-4-6": _CODEX_DEFAULT_MODEL,
     "claude-sonnet-5": _CODEX_DEFAULT_MODEL,
+    "claude-opus-5-5": _CODEX_JUDGMENT_MODEL,
     "claude-opus-4-7": _CODEX_JUDGMENT_MODEL,
     "claude-opus-4-8": _CODEX_JUDGMENT_MODEL,
+    "claude-fable-5-1": _CODEX_JUDGMENT_MODEL,
     "claude-fable-5": _CODEX_JUDGMENT_MODEL,
     "gemini-4-hydrogen": _CODEX_FAST_MODEL,
     "gemini-4-neon": _CODEX_DEFAULT_MODEL,

@@ -111,6 +111,25 @@ def test_gemini_4_models_resolve_with_unified_1m_capabilities(gemini_model: str)
     )[0]
 
 
+@pytest.mark.parametrize(
+    "claude_model",
+    ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"],
+)
+def test_claude_55_models_resolve_with_1m_capabilities(claude_model: str) -> None:
+    profile = CapabilityProfile(
+        min_context_length=1_000_000,
+        requires_vision=True,
+        requires_structured_output=True,
+    )
+    model, backend = resolve_model_and_backend(
+        purpose=None,
+        model=claude_model,
+        capability_profile=profile,
+    )
+    assert model == claude_model
+    assert backend == "claude"
+
+
 def test_gemini_fallback_constants_avoid_deprecated_25_flash() -> None:
     from llm import fallback
 

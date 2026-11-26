@@ -97,6 +97,30 @@ MODEL_LADDER: dict[str, ModelCost] = {
     # 2026-07 price exists for it, so it's left at its last-known value
     # (historical replay only; no purpose pins this id).
     "claude-opus-4-7": ModelCost("claude-opus-4-7", CLAUDE, 15.00, 75.00),
+    # Claude 5.5 lineup (verified 2026-10-21 against platform.claude.com/docs/en/models/overview
+    # and procedures/model-frontier.REFERENCE.md).
+    # Haiku 5.5 charges $0.10/$0.50 up to 100K prompt tokens (cache read $0.01) and
+    # $0.50/$2.50 above 100K (cache read $0.05).
+    "claude-haiku-5-5": ModelCost(
+        "claude-haiku-5-5",
+        CLAUDE,
+        0.10,
+        0.50,
+        cached_input_usd_per_mtok=0.01,
+        long_context_threshold_tokens=100_000,
+        long_input_usd_per_mtok=0.50,
+        long_output_usd_per_mtok=2.50,
+        long_cached_input_usd_per_mtok=0.05,
+    ),
+    "claude-sonnet-5-5": ModelCost(
+        "claude-sonnet-5-5", CLAUDE, 2.00, 10.00, cached_input_usd_per_mtok=0.10
+    ),
+    "claude-opus-5-5": ModelCost(
+        "claude-opus-5-5", CLAUDE, 4.00, 20.00, cached_input_usd_per_mtok=0.20
+    ),
+    "claude-fable-5-1": ModelCost(
+        "claude-fable-5-1", CLAUDE, 10.00, 50.00, cached_input_usd_per_mtok=0.25
+    ),
     # Same id as the incumbent purpose pins (no model swap) — price corrected
     # from the stale $15/$75 entry to the verified 2026-07-21 $5/$25.
     "claude-opus-4-8": ModelCost("claude-opus-4-8", CLAUDE, 5.00, 25.00),
@@ -192,7 +216,7 @@ DEEPSEEK_JUDGE_MODEL = "deepseek/deepseek-v4-flash"  # reviewed 2026-07-25
 DEFAULT_JUDGES: tuple[str, ...] = ("gemini", "claude")
 
 JUDGE_POOL: dict[str, str] = {
-    CLAUDE: "claude-opus-4-8",
+    CLAUDE: "claude-opus-5-5",
     GEMINI: "gemini-4-neon",
     "deepseek": DEEPSEEK_JUDGE_MODEL,
     "codex": "gpt-5.6-terra",
