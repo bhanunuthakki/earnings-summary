@@ -28,6 +28,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_session_hook_registers_success_and_preserves_failure(
     tmp_path: Path, passed: bool, actions: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    if not actions and shutil.disk_usage(tmp_path).free < 52 * 1024**3:
+        pytest.skip(
+            "non-Actions collection requires >=52 GiB free headroom (50 GiB floor + 2 GiB budget)"
+        )
     source = tmp_path / "synthetic-project"
     tests = source / "tests"
     tests.mkdir(parents=True)
