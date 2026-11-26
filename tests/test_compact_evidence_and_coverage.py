@@ -1027,3 +1027,92 @@ def test_maintenance_transaction_restores_foreign_keys_on_commit_and_error(
         )
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             conn.execute("DELETE FROM evidence_nodes WHERE node_id = 'n-leaf-cell-001'")
+
+
+def test_step_a_protects_polymorphic_processing_evidence_members(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state_root = tmp_path / "poly_state"
+    db_path = migrated_db(state_root / "data" / "portfolio.db")
+    ids = _seed_step_a_database(db_path)
+    protected_node_id = "n-leaf-cell-007"
+
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER) as conn:
+        run_row = conn.execute(
+            "SELECT document_version_id, input_sha256, output_sha256 "
+            "FROM evidence_extraction_runs WHERE extraction_run_id = ?",
+            (ids["fulltext_run_id"],),
+        ).fetchone()
+        assert run_row is not None
+        doc_ver_id, input_sha, output_sha = str(run_row[0]), str(run_row[1]), str(run_row[2])
+        empty_obj = "{}"
+        empty_sha = _sha(empty_obj)
+        conn.execute(
+            "INSERT INTO document_processing_evidence_headers ("
+            "evidence_seal_id, idempotency_key, document_version_id, processing_lane, "
+            "extraction_run_id, assessment_table, assessment_id, adapter_name, adapter_version, "
+            "adapter_config_sha256, input_blob_sha256, native_output_sha256, native_scope_json, "
+            "native_scope_sha256, canonical_header_json, header_sha256, cutoff_at, knowledge_at, "
+            "recorded_at"
+            ") VALUES ('dpe-seal-1', 'dpe-seal-1', ?, 'html_native_hierarchy', ?, NULL, NULL, "
+            "'adapter', 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                doc_ver_id,
+                ids["fulltext_run_id"],
+                "a" * 64,
+                input_sha,
+                output_sha,
+                empty_obj,
+                empty_sha,
+                empty_obj,
+                empty_sha,
+                STAMP.isoformat(),
+                STAMP.isoformat(),
+                STAMP.isoformat(),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO document_processing_evidence_members ("
+            "evidence_seal_id, member_ordinal, native_table, native_id, native_parent_id, "
+            "locator_json, locator_sha256, content_sha256, native_commitment_json, "
+            "native_commitment_sha256, canonical_member_json, member_sha256, "
+            "native_knowledge_at, native_recorded_at"
+            ") VALUES ('dpe-seal-1', 0, 'evidence_nodes', ?, 'n-row', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                protected_node_id,
+                empty_obj,
+                empty_sha,
+                "b" * 64,
+                empty_obj,
+                empty_sha,
+                empty_obj,
+                empty_sha,
+                STAMP.isoformat(),
+                STAMP.isoformat(),
+            ),
+        )
+        conn.commit()
+
+    rc = compactor.main(["--db-path", str(db_path), "--state-root", str(state_root), "--apply"])
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    # 119 of 120 leaf table_cells archived/deleted; the 1 referenced by document_processing_evidence_members survives!
+    assert receipt["step_a_evidence_nodes"]["eligible_nodes"] == 119
+    assert receipt["step_a_evidence_nodes"]["archived_nodes"] == 119
+    assert receipt["step_a_evidence_nodes"]["deleted_nodes"] == 119
+
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+        assert (
+            conn.execute(
+                "SELECT 1 FROM evidence_nodes WHERE node_id = ?", (protected_node_id,)
+            ).fetchone()
+            is not None
+        )
+        assert (
+            conn.execute(
+                "SELECT 1 FROM evidence_nodes WHERE node_id = 'n-leaf-cell-006'"
+            ).fetchone()
+            is None
+        )

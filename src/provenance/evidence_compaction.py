@@ -113,6 +113,13 @@ _SELF_REFERENCED_NODE_IDS_SQL = (
     "WHERE parent_node_id IS NOT NULL OR supersedes_node_id IS NOT NULL"
 )
 
+# Polymorphic (non-FK) references to evidence_nodes.node_id from sealed
+# document-processing evidence inventories (consumed by decision_brief.py).
+_POLYMORPHIC_PROCESSING_MEMBER_NODE_IDS_SQL = (
+    "SELECT DISTINCT native_id FROM document_processing_evidence_members "
+    "WHERE native_table = 'evidence_nodes' AND native_id IS NOT NULL"
+)
+
 _FETCH_RUN_NODES_SQL = (
     "SELECT rowid AS native_rowid, node_id, evidence_key, revision, "
     "extraction_run_id, parent_node_id, supersedes_node_id, node_kind, "
@@ -372,6 +379,11 @@ def _collect_referenced_evidence_node_ids(conn: sqlite3.Connection) -> set[str]:
         if table_name not in tables or col_name not in _existing_columns(conn, table_name):
             continue
         for row in conn.execute(query_sql).fetchall():
+            if row[0] is not None:
+                referenced.add(str(row[0]))
+
+    if "document_processing_evidence_members" in tables:
+        for row in conn.execute(_POLYMORPHIC_PROCESSING_MEMBER_NODE_IDS_SQL).fetchall():
             if row[0] is not None:
                 referenced.add(str(row[0]))
     return referenced
