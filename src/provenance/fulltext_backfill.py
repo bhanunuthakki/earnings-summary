@@ -43,7 +43,9 @@ from provenance.fulltext_extractor_identity import (
     PDF_FULLTEXT_EXTRACTOR,
     PDF_FULLTEXT_PYPDF_VERSION,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
+    STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR,
     FulltextExtractorIdentity,
+    readable_fulltext_extractor_identities,
     resolve_fulltext_extractor_identity,
     select_approved_fulltext_run,
 )
@@ -128,6 +130,7 @@ class FullTextBackfillRequest(BaseModel):
     max_nodes_per_batch: int = Field(default=50_000, ge=1, le=1_000_000)
     source_lane: _SourceLane = "legacy"
     format_scope: _FormatScope = "all"
+    include_table_cells: bool = False
     task_id: str = Field(
         default="fulltext-evidence-backfill", pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$"
     )
@@ -284,6 +287,8 @@ class SourceTextProjectionError(ValueError):
 
 def source_text_projection_identity(source_ref: str, media_type: str | None = None) -> str:
     identity = resolve_fulltext_extractor_identity(source_ref, media_type)
+    if identity == STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR:
+        identity = STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR
     return f"{SOURCE_TEXT_PROJECTION_VERSION}:{identity.code_version}:{identity.config_sha256}"
 
 
@@ -298,7 +303,7 @@ def project_source_text(raw_bytes: bytes, source_ref: str, media_type: str | Non
     if suffix not in {".pdf", ".html", ".htm", ".xhtml", ".txt", ".text", ".md"}:
         raise SourceTextProjectionError("unsupported_source_text_format")
     try:
-        nodes = _extract_nodes(source_ref, raw_bytes, media_type)
+        nodes = _extract_nodes(source_ref, raw_bytes, media_type, include_table_cells=True)
     except _ExtractionError as error:
         raise SourceTextProjectionError(error.reason) from error
     text = "\n".join(
@@ -469,6 +474,7 @@ def _bounded_candidate_plans(
             candidate,
             allowed_roots,
             request.format_scope,
+            include_table_cells=request.include_table_cells,
         )
         summary.documents_sized += 1
         no_write_cost = plan.record_count == 0 and plan.node_count == 0
@@ -498,8 +504,12 @@ def _plan_candidate(
     candidate: _DocumentCandidate,
     allowed_roots: tuple[Path, ...],
     format_scope: _FormatScope,
+    *,
+    include_table_cells: bool = False,
 ) -> _CandidatePlan:
     identity = resolve_fulltext_extractor_identity(candidate.source_ref, candidate.media_type)
+    if include_table_cells and identity == STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR:
+        identity = STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR
     if (
         format_scope == "office"
         and classify_office_format(candidate.source_ref, candidate.media_type) is None
@@ -547,6 +557,7 @@ def _plan_candidate(
             raw_bytes,
             candidate.media_type,
             archive_replica_resolver=replica_resolver,
+            include_table_cells=include_table_cells,
         )
     except _ExtractionError as error:
         return _CandidatePlan(
@@ -778,6 +789,7 @@ def _extract_nodes(
     media_type: str | None = None,
     *,
     archive_replica_resolver: _ArchiveReplicaResolver | None = None,
+    include_table_cells: bool = False,
 ) -> list[_NodeText]:
     suffix = Path(urlparse(source_ref).path).suffix.lower()
     normalized_media_type = None if media_type is None else media_type.partition(";")[0].lower()
@@ -803,9 +815,10 @@ def _extract_nodes(
             raw_bytes,
             source_ref,
             replica_resolver=archive_replica_resolver,
+            include_table_cells=include_table_cells,
         )
     if normalized_media_type in {"text/html", "application/xhtml+xml"} or suffix in _HTML_SUFFIXES:
-        return _extract_html(raw_bytes, source_ref)
+        return _extract_html(raw_bytes, source_ref, include_table_cells=include_table_cells)
     if (
         (
             normalized_media_type is not None
@@ -836,6 +849,8 @@ def verify_native_html_replay(
     raw_bytes: bytes,
     source_ref: str,
     nodes: tuple[tuple[str, str, EvidenceLocator], ...],
+    *,
+    include_table_cells: bool = True,
 ) -> None:
     """Verify stored native coordinates and text against the owning HTML parser.
 
@@ -847,7 +862,7 @@ def verify_native_html_replay(
 
     expected = Counter(
         (node.node_kind, node.text, node.locator.canonical_json)
-        for node in _extract_html(raw_bytes, source_ref)
+        for node in _extract_html(raw_bytes, source_ref, include_table_cells=include_table_cells)
     )
     observed = Counter(
         (kind, text, locator.canonical_json)
@@ -858,11 +873,13 @@ def verify_native_html_replay(
         raise ValueError("native HTML hierarchy does not replay from source bytes")
 
 
-def _extract_html(raw_bytes: bytes, source_ref: str) -> list[_NodeText]:
+def _extract_html(
+    raw_bytes: bytes, source_ref: str, *, include_table_cells: bool = False
+) -> list[_NodeText]:
     if len(raw_bytes) > _MAX_HTML_BYTES:
         raise _ExtractionError("html_too_large")
     source = raw_bytes.decode("utf-8", errors="replace")
-    parser = _SourceAnchoredHtmlParser(source, source_ref)
+    parser = _SourceAnchoredHtmlParser(source, source_ref, include_table_cells=include_table_cells)
     try:
         parser.feed(source)
         parser.close()
@@ -885,6 +902,7 @@ def _extract_zip_archive(
     source_ref: str,
     *,
     replica_resolver: _ArchiveReplicaResolver | None,
+    include_table_cells: bool = False,
 ) -> list[_NodeText]:
     """Extract a fail-closed, bounded archive without writing members to disk."""
 
@@ -954,6 +972,7 @@ def _extract_zip_archive(
                             in _ARCHIVE_XML_SUFFIXES
                             else None
                         ),
+                        include_table_cells=include_table_cells,
                     )
                 except _ExtractionError as error:
                     if error.reason == "unsupported_format":
@@ -1083,10 +1102,11 @@ class _HtmlFrame:
 class _SourceAnchoredHtmlParser(HTMLParser):
     """Emit exact decoded-source spans with deterministic source-DOM paths."""
 
-    def __init__(self, source: str, source_ref: str) -> None:
+    def __init__(self, source: str, source_ref: str, *, include_table_cells: bool = False) -> None:
         super().__init__(convert_charrefs=False)
         self.source = source
         self.source_ref = source_ref
+        self._include_table_cells = include_table_cells
         self.nodes: list[_NodeText] = []
         self.has_substantive_text = False
         self._stack: list[_HtmlFrame] = []
@@ -1254,6 +1274,8 @@ class _SourceAnchoredHtmlParser(HTMLParser):
         cell = self._nearest_cell_frame()
         if cell is not None and row is not None and cell.table_path is not None:
             cell.cell_text_parts.append(text)
+            if not self._include_table_cells:
+                return
             node_kind: Literal["passage", "table_cell"] = "table_cell"
             local_key = self._next_local_key(node_kind)
             parent = row.local_key
@@ -1617,6 +1639,43 @@ def _new_node(
     )
 
 
+def _is_structured_web_archive_identity(identity: FulltextExtractorIdentity) -> bool:
+    return identity in {
+        STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
+        STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR,
+    }
+
+
+def _index_member_exclusion_sql(conn: sqlite3.Connection) -> str:
+    """Exclude active index_member-only legacy documents when tracked_companies is present."""
+
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracked_companies'"
+        ).fetchone()
+        is None
+    ):
+        return ""
+    doc_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(documents)")}
+    if "ticker" not in doc_columns:
+        return ""
+    tc_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+    if not {"ticker", "list_type"} <= tc_columns:
+        return ""
+    archived = " AND tc.archived_at IS NULL" if "archived_at" in tc_columns else ""
+    archived_active = " AND tc_active.archived_at IS NULL" if "archived_at" in tc_columns else ""
+    return (
+        " AND NOT ("
+        "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+        f"WHERE UPPER(tc.ticker) = UPPER(documents.ticker){archived} "
+        "AND tc.list_type = 'index_member') "
+        "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+        f"WHERE UPPER(tc_active.ticker) = UPPER(documents.ticker){archived_active} "
+        "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+        ")"
+    )
+
+
 def _has_substantive_coverage(
     conn: sqlite3.Connection,
     document_version_id: str,
@@ -1624,38 +1683,42 @@ def _has_substantive_coverage(
 ) -> bool:
     if identity == PDF_FULLTEXT_EXTRACTOR:
         return select_approved_fulltext_run(conn, document_version_id, identity) is not None
-    node_predicate = (
-        "(node.node_kind <> 'document' OR "
-        "(node.parent_node_id IS NOT NULL AND node.text LIKE "
-        '\'%"record_kind":"archive_binary_replica_reference"%\'))'
-        if identity is STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR
-        else "node.node_kind <> 'document'"
-    )
-    return (
-        conn.execute(
-            "SELECT 1 FROM evidence_nodes AS node JOIN evidence_extraction_runs AS run "  # nosec B608 -- trusted internal SQL shape; values remain bound
-            "ON run.extraction_run_id = node.extraction_run_id "
-            "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
-            "AND run.extractor_name = ? AND run.extractor_config_sha256 = ? "
-            f"AND run.extractor_code_version = ? AND {node_predicate} "
-            "AND length(trim(node.text)) > 0 LIMIT 1",
-            (
-                document_version_id,
-                identity.name,
-                identity.config_sha256,
-                identity.code_version,
-            ),
-        ).fetchone()
-        is not None
-    )
+    for approved in readable_fulltext_extractor_identities(identity):
+        node_predicate = (
+            "(node.node_kind <> 'document' OR "
+            "(node.parent_node_id IS NOT NULL AND node.text LIKE "
+            '\'%"record_kind":"archive_binary_replica_reference"%\'))'
+            if _is_structured_web_archive_identity(approved)
+            else "node.node_kind <> 'document'"
+        )
+        if (
+            conn.execute(
+                "SELECT 1 FROM evidence_nodes AS node JOIN evidence_extraction_runs AS run "  # nosec B608 -- trusted internal SQL shape; values remain bound
+                "ON run.extraction_run_id = node.extraction_run_id "
+                "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
+                "AND run.extractor_name = ? AND run.extractor_config_sha256 = ? "
+                f"AND run.extractor_code_version = ? AND {node_predicate} "
+                "AND length(trim(node.text)) > 0 LIMIT 1",
+                (
+                    document_version_id,
+                    approved.name,
+                    approved.config_sha256,
+                    approved.code_version,
+                ),
+            ).fetchone()
+            is not None
+        ):
+            return True
+    return False
 
 
 def _candidates_after(
     conn: sqlite3.Connection, last_document_id: int, batch_size: int
 ) -> list[_DocumentCandidate]:
+    index_member_exclusion = _index_member_exclusion_sql(conn)
     rows = conn.execute(
-        "WITH selected_documents AS ("
-        "SELECT * FROM documents WHERE id > ? ORDER BY id LIMIT ?"
+        "WITH selected_documents AS ("  # nosec B608 -- closed internal predicate; all values remain bound
+        f"SELECT * FROM documents WHERE id > ?{index_member_exclusion} ORDER BY id LIMIT ?"
         ") SELECT document.id AS document_id, document.file_path, lower(document.sha256) "
         "AS document_sha256, document.raw_bytes_size, document_version.document_version_id, "
         "document_version.blob_sha256, document_version.recorded_at AS document_recorded_at "
@@ -1729,8 +1792,12 @@ def _candidate_from_row(row: sqlite3.Row) -> _DocumentCandidate:
 
 
 def _has_documents_after(conn: sqlite3.Connection, last_document_id: int) -> bool:
+    index_member_exclusion = _index_member_exclusion_sql(conn)
     return (
-        conn.execute("SELECT 1 FROM documents WHERE id > ? LIMIT 1", (last_document_id,)).fetchone()
+        conn.execute(
+            f"SELECT 1 FROM documents WHERE id > ?{index_member_exclusion} LIMIT 1",  # nosec B608 -- closed internal predicate; all values remain bound
+            (last_document_id,),
+        ).fetchone()
         is not None
     )
 
@@ -1831,7 +1898,7 @@ def _node_id(run_id: str, suffix: str) -> str:
 
 
 def _document_evidence_key(document_version_id: str, identity: FulltextExtractorIdentity) -> str:
-    if identity is STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR:
+    if _is_structured_web_archive_identity(identity):
         # The structured web extractor replaces the former one-node HTML
         # extraction instead of leaving two current document assertions.
         return f"fulltext-document:{_stable_token(document_version_id)}"
@@ -1845,7 +1912,7 @@ def _content_evidence_key(
     identity: FulltextExtractorIdentity,
 ) -> str:
     if identity is BASE_FULLTEXT_EXTRACTOR or (
-        identity is STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR and ordinal == 1
+        _is_structured_web_archive_identity(identity) and ordinal == 1
     ):
         # Structured HTML's first source-anchored node supersedes the legacy
         # monolithic passage at ordinal one; all additional precise nodes use

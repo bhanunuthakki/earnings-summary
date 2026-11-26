@@ -758,6 +758,28 @@ def _selection_modes(conn: sqlite3.Connection) -> dict[str, str]:
     return modes
 
 
+def _index_member_exclusion_sql(conn: sqlite3.Connection) -> str:
+    """Exclude active index_member-only documents when tracked_companies is present."""
+
+    if not _has_table(conn, "tracked_companies"):
+        return ""
+    tc_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+    if not {"ticker", "list_type"} <= tc_columns:
+        return ""
+    archived = " AND tc.archived_at IS NULL" if "archived_at" in tc_columns else ""
+    archived_active = " AND tc_active.archived_at IS NULL" if "archived_at" in tc_columns else ""
+    return (
+        " AND NOT ("
+        "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+        f"WHERE UPPER(tc.ticker) = UPPER(documents.ticker){archived} "
+        "AND tc.list_type = 'index_member') "
+        "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+        f"WHERE UPPER(tc_active.ticker) = UPPER(documents.ticker){archived_active} "
+        "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+        ")"
+    )
+
+
 def _documents_after(
     conn: sqlite3.Connection, last_document_id: int, batch_size: int
 ) -> list[sqlite3.Row]:
@@ -766,8 +788,10 @@ def _documents_after(
         "documents",
         {"id", "ticker", "source_type", "doc_type", "file_path", "sha256", "fetched_at"},
     )
+    index_member_exclusion = _index_member_exclusion_sql(conn)
     return conn.execute(
-        "SELECT * FROM documents WHERE id > ? ORDER BY id LIMIT ?", (last_document_id, batch_size)
+        f"SELECT * FROM documents WHERE id > ?{index_member_exclusion} ORDER BY id LIMIT ?",  # nosec B608 -- closed internal predicate; all values remain bound
+        (last_document_id, batch_size),
     ).fetchall()
 
 
@@ -781,7 +805,11 @@ def _documents_by_id(conn: sqlite3.Connection, document_id: int) -> list[sqlite3
 
 
 def _has_documents_after(conn: sqlite3.Connection, document_id: int) -> bool:
-    row = conn.execute("SELECT 1 FROM documents WHERE id > ? LIMIT 1", (document_id,)).fetchone()
+    index_member_exclusion = _index_member_exclusion_sql(conn)
+    row = conn.execute(
+        f"SELECT 1 FROM documents WHERE id > ?{index_member_exclusion} LIMIT 1",  # nosec B608 -- closed internal predicate; all values remain bound
+        (document_id,),
+    ).fetchone()
     return row is not None
 
 

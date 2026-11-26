@@ -55,6 +55,38 @@ class EvidenceNativeDocumentCandidate(BaseModel):
     recorded_at: datetime
 
 
+def _index_member_exclusion_sql(conn: sqlite3.Connection) -> str:
+    """Exclude active index_member-only rows when tracked_companies and ticker are present."""
+
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracked_companies'"
+        ).fetchone()
+        is None
+    ):
+        return ""
+    doc_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(evidence_document_versions)")
+    }
+    if "ticker" not in doc_columns:
+        return ""
+    tc_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
+    if not {"ticker", "list_type"} <= tc_columns:
+        return ""
+    archived = " AND tc.archived_at IS NULL" if "archived_at" in tc_columns else ""
+    archived_active = " AND tc_active.archived_at IS NULL" if "archived_at" in tc_columns else ""
+    return (
+        " AND NOT ("
+        "EXISTS (SELECT 1 FROM tracked_companies AS tc "
+        f"WHERE UPPER(tc.ticker) = UPPER(document.ticker){archived} "
+        "AND tc.list_type = 'index_member') "
+        "AND NOT EXISTS (SELECT 1 FROM tracked_companies AS tc_active "
+        f"WHERE UPPER(tc_active.ticker) = UPPER(document.ticker){archived_active} "
+        "AND tc_active.list_type IN ('portfolio', 'evaluation', 'watchlist'))"
+        ")"
+    )
+
+
 def select_evidence_native_candidates(
     conn: sqlite3.Connection,
     *,
@@ -71,8 +103,9 @@ def select_evidence_native_candidates(
     """
 
     _require_schema(conn)
+    index_member_exclusion = _index_member_exclusion_sql(conn)
     rows = conn.execute(
-        "SELECT document.rowid AS evidence_rowid, document.document_version_id, "
+        "SELECT document.rowid AS evidence_rowid, document.document_version_id, "  # nosec B608 -- closed internal predicate; all values remain bound
         "lower(document.blob_sha256) AS blob_sha256, blob.byte_size, blob.media_type, "
         "COALESCE(("
         "SELECT location.storage_uri FROM v_evidence_blob_locations_current AS location "
@@ -92,6 +125,7 @@ def select_evidence_native_candidates(
         "OR lower(observation.source_url) LIKE '%.pdf' "
         "OR lower(observation.source_url) LIKE '%.pdf?%' "
         "OR lower(observation.source_url) LIKE '%.pdf#%') "
+        f"{index_member_exclusion} "
         "ORDER BY document.rowid LIMIT ?",
         (after_rowid, pdf_only, batch_size),
     ).fetchall()
@@ -115,9 +149,10 @@ def has_evidence_native_after(
 ) -> bool:
     """Return whether another legacy-free append exists after the cursor."""
 
+    index_member_exclusion = _index_member_exclusion_sql(conn)
     return (
         conn.execute(
-            "SELECT 1 FROM evidence_document_versions AS document "
+            "SELECT 1 FROM evidence_document_versions AS document "  # nosec B608 -- closed internal predicate; all values remain bound
             "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
             "JOIN evidence_source_observations AS observation "
             "ON observation.observation_id = document.observation_id "
@@ -125,7 +160,8 @@ def has_evidence_native_after(
             "AND (? = 0 OR lower(blob.media_type) = 'application/pdf' "
             "OR lower(observation.source_url) LIKE '%.pdf' "
             "OR lower(observation.source_url) LIKE '%.pdf?%' "
-            "OR lower(observation.source_url) LIKE '%.pdf#%') LIMIT 1",
+            "OR lower(observation.source_url) LIKE '%.pdf#%') "
+            f"{index_member_exclusion} LIMIT 1",
             (after_rowid, pdf_only),
         ).fetchone()
         is not None

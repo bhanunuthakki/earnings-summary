@@ -398,7 +398,7 @@ def test_evidence_only_ticker_is_bound_without_entering_research_scope(
         "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (?, 'bhanu', ?, ?, ?, NULL)",
         (
             (1, "ACME", "Acme", "portfolio"),
-            (2, "HIST", "Historical index constituent", "index_member"),
+            (2, "HIST", "Former holding", "none"),
         ),
     )
     body = b"historical filing"
@@ -475,6 +475,90 @@ def test_evidence_only_ticker_is_bound_without_entering_research_scope(
         "SELECT issuer_id FROM v_evidence_document_versions_canonical "
         "WHERE document_version_id = 'historical-document'"
     ).fetchone() == (historical_issuer,)
+    conn.close()
+
+
+def test_index_member_with_legacy_evidence_is_not_readmitted_via_historical_tickers(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = _database(tmp_path, migrated_db)
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) VALUES (?, 'bhanu', ?, ?, ?, NULL)",
+        (
+            (1, "ACME", "Acme", "portfolio"),
+            (2, "IDX", "Index Constituent", "index_member"),
+        ),
+    )
+    body = b"legacy index member artifact"
+    digest = hashlib.sha256(body).hexdigest()
+    blob_path = tmp_path / digest
+    blob_path.write_bytes(body)
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=digest,
+            byte_size=len(body),
+            media_type="application/json",
+            storage_uri=blob_path.resolve().as_uri(),
+            recorded_at=STAMP,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id="idx-observation",
+            idempotency_key="idx-observation",
+            source_kind="fmp",
+            source_url="https://fmp.example/IDX_profile.json",
+            blob_sha256=digest,
+            source_published_at=STAMP,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=STAMP,
+            retrieved_at=STAMP,
+            retrieval_config_sha256="b" * 64,
+            collector_code_version="fixture@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id="idx-document",
+            document_key="idx-document",
+            version_sequence=1,
+            observation_id="idx-observation",
+            blob_sha256=digest,
+            issuer_id="legacy-ticker:IDX",
+            ticker="IDX",
+            document_type="fmp_profile",
+            form_type="fmp_profile",
+            language="en",
+            recorded_at=STAMP,
+        )
+    )
+    conn.commit()
+
+    raw = _body(
+        {"cik_str": 123, "ticker": "ACME", "title": "Acme Corporation"},
+        {"cik_str": 789, "ticker": "IDX", "title": "Index Constituent Inc."},
+    )
+    result = bootstrap_issuer_reporting_registry(
+        conn,
+        raw_body=raw,
+        request=_request(tmp_path, apply=True),
+    )
+    conn.commit()
+
+    assert result.selected_tickers == ("ACME",)
+    assert result.excluded_index_member_count == 1
+    assert "IDX" not in {item.ticker for item in result.results}
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM legacy_issuer_binding_revisions "
+            "WHERE recorded_issuer_id = 'legacy-ticker:IDX'"
+        ).fetchone()[0]
+        == 0
+    )
     conn.close()
 
 

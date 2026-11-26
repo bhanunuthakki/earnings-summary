@@ -433,3 +433,37 @@ def test_verified_reader_rejects_wrong_physical_size(tmp_path: Path, content: by
             expected_byte_size=5,
             allowed_roots=(tmp_path,),
         )
+
+
+def test_evidence_native_candidates_skip_index_member_tickers_by_default(tmp_path: Path) -> None:
+    conn = _connection(tmp_path)
+    try:
+        conn.execute("ALTER TABLE evidence_document_versions ADD COLUMN ticker TEXT")
+        conn.execute(
+            "UPDATE evidence_document_versions SET ticker = 'ACME' "
+            "WHERE document_version_id = 'version-1'"
+        )
+        conn.execute(
+            "UPDATE evidence_document_versions SET ticker = 'IDX' "
+            "WHERE document_version_id = 'version-2'"
+        )
+        conn.execute(
+            "CREATE TABLE tracked_companies ("
+            "ticker TEXT NOT NULL, list_type TEXT NOT NULL, archived_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker, list_type, archived_at) VALUES (?, ?, NULL)",
+            (("ACME", "portfolio"), ("IDX", "index_member")),
+        )
+        conn.commit()
+
+        candidates = select_evidence_native_candidates(conn, after_rowid=0, batch_size=10)
+        assert [candidate.document_version_id for candidate in candidates] == ["version-1"]
+        assert not has_evidence_native_after(conn, candidates[0].evidence_rowid)
+
+        explicit = select_evidence_native_candidates_by_id(
+            conn, document_version_ids=("version-2",)
+        )
+        assert [candidate.document_version_id for candidate in explicit] == ["version-2"]
+    finally:
+        conn.close()
