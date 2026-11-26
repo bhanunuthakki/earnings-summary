@@ -27,6 +27,7 @@ from filings.footnote_drivers import (  # noqa: E402
     load_cached_item_8_text,
     persist_footnote_drivers,
 )
+from llm.structured import call_llm_structured  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_footnotes")
@@ -36,10 +37,10 @@ def extract_for_ticker(
     *,
     ticker: str,
     repo_root: Path,
-    db_path: Path,
     user_agent: str,
+    db_path: Path | None = None,
     fiscal_year: int | None = None,
-    allow_fetch: bool = False,
+    allow_fetch: bool = True,
 ) -> dict[str, object]:
     """Extract and persist footnote drivers for one ticker."""
     upper = ticker.upper()
@@ -71,20 +72,28 @@ def extract_for_ticker(
             ticker=upper,
             fiscal_year=resolved_fy,
             item_8_text=item_8_text,
+            llm_caller=call_llm_structured,
         )
     if outcome.status != "ok":
         return {"ticker": upper, "fiscal_year": resolved_fy, "status": outcome.status, "n": 0}
 
-    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-    try:
-        inserted = persist_footnote_drivers(
-            conn,
-            ticker=upper,
-            fiscal_year=resolved_fy,
-            rows=outcome.accepted_rows,
-        )
-    finally:
-        conn.close()
+    target_db = (
+        db_path
+        if db_path is not None
+        else (fallback if (fallback := repo_root / "data" / "portfolio.db").exists() else None)
+    )
+    inserted = 0
+    if target_db is not None:
+        conn = connect_sqlite(target_db, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        try:
+            inserted = persist_footnote_drivers(
+                conn,
+                ticker=upper,
+                fiscal_year=resolved_fy,
+                rows=outcome.accepted_rows,
+            )
+        finally:
+            conn.close()
 
     return {
         "ticker": upper,
