@@ -250,9 +250,9 @@ def test_migration_0072_table_constraints_downgrade_and_reupgrade(
 def test_archive_write_deterministic_roundtrip_and_fail_closed_checks(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    db_path = migrated_db(tmp_path / "store.db")
     state_root = tmp_path / "state"
     state_root.mkdir()
+    db_path = migrated_db(state_root / "data" / "portfolio.db")
 
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER) as conn:
         run_id, output_sha = _seed_run_with_nodes(conn)
@@ -348,6 +348,17 @@ def test_archive_write_deterministic_roundtrip_and_fail_closed_checks(
         # Audit clean with valid state_root.
         clean_audit = audit_connection(conn, AuditOptions(state_root=state_root))
         assert not any(f.code.startswith("EVIDENCE_ARCHIVE_") for f in clean_audit.findings)
+
+        # Audit with verify_bytes=True + separate repo_root (e.g. Windows junctioned runtime/data)
+        # resolves state_root from the connected <state_root>/data/portfolio.db path, not repo_root.
+        separate_repo_root = tmp_path / "runtime_checkout"
+        separate_repo_root.mkdir()
+        (separate_repo_root / "data").symlink_to(state_root / "data", target_is_directory=True)
+        inferred_audit = audit_connection(
+            conn,
+            AuditOptions(verify_bytes=True, repo_root=separate_repo_root),
+        )
+        assert not any(f.code.startswith("EVIDENCE_ARCHIVE_") for f in inferred_audit.findings)
 
         # Corrupt archive bytes -> fail closed on load AND audit blocker.
         art1.archive_path.write_bytes(gzip.compress(b'{"node_id":"tampered"}\n'))
