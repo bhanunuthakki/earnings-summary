@@ -53,6 +53,10 @@ def upgrade() -> None:
         )
         """
     )
+    op.execute(
+        "CREATE VIEW IF NOT EXISTS v_inactive_filing_sections AS "
+        "SELECT * FROM filing_sections WHERE is_active = 0"
+    )
     connection = op.get_bind()
     if (
         connection.exec_driver_sql(
@@ -66,4 +70,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP VIEW IF EXISTS v_inactive_filing_sections")
     op.execute("DROP TABLE IF EXISTS evidence_node_external_archives")

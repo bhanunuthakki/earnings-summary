@@ -1,6 +1,8 @@
 """Guarded single-writer compaction logic for evidence_nodes externalization and coverage pruning.
 
 Called by the thin CLI entrypoint ``execution/compact_evidence_and_coverage.py``.
+All database queries use static SQL templates and explicit allowlists (zero
+dynamic SQL string interpolation).
 """
 
 from __future__ import annotations
@@ -14,17 +16,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from filings.store import delete_sections_by_ids
 from provenance.evidence_node_store import (
     has_external_archives_table,
     write_run_nodes_archive,
 )
+from provenance.selection import selected_filing_sections_relation
 from run_lock import hold_run_lock
 from runtime.job_runtime import inherited_lock_is_valid
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DEFAULT_BATCH_SIZE = 20_000
 DEFAULT_LOCK_TIMEOUT_S = 60.0
-_MAX_SQLITE_BIND_VARS = 500
 _FULLTEXT_EXTRACTOR_NAME = "fulltext-evidence-backfill"
 
 _EVIDENCE_NODE_TRIGGER = "trg_evidence_nodes_append_only_delete"
@@ -42,23 +45,151 @@ _COVERAGE_TRIGGERS: tuple[tuple[str, str], ...] = (
     ("expected_documents", "trg_expected_documents_append_only_delete"),
 )
 
-# Explicit external FK tables that may reference evidence_nodes(node_id).
-# Additional FK tables discovered via PRAGMA foreign_key_list are unioned dynamically.
-_NAMED_EVIDENCE_NODE_FK_REFS: tuple[tuple[str, str], ...] = (
-    ("canonical_fact_projection_entries", "evidence_node_id"),
-    ("fact_observations_v2", "evidence_node_id"),
-    ("fact_selection_decisions", "evidence_node_id"),
-    ("filing_xbrl_raw_fact_commitments", "evidence_node_id"),
-    ("image_ocr_results", "node_id"),
-    ("latest_governed_narrative_entries", "evidence_node_id"),
-    ("legacy_document_evidence_binding_revisions", "evidence_node_id"),
-    ("legacy_fact_evidence_match_revisions", "evidence_node_id"),
-    ("ocr_page_results", "node_id"),
-    ("reported_observations", "evidence_node_id"),
-    ("search_chunks", "evidence_node_id"),
-    ("kpi_definition_revisions", "source_evidence_node_id"),
-    ("kpi_definition_comparability_revisions", "source_evidence_node_id"),
+# Static SQL for every allowlisted external FK table referencing evidence_nodes(node_id).
+# Any additional table discovered via PRAGMA foreign_key_list fails closed until registered here.
+_EVIDENCE_NODE_FK_QUERIES: dict[tuple[str, str], str] = {
+    ("canonical_fact_projection_entries", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM canonical_fact_projection_entries "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("fact_observations_v2", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM fact_observations_v2 "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("fact_selection_decisions", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM fact_selection_decisions "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("filing_xbrl_raw_fact_commitments", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM filing_xbrl_raw_fact_commitments "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("image_ocr_results", "node_id"): (
+        "SELECT DISTINCT node_id FROM image_ocr_results WHERE node_id IS NOT NULL"
+    ),
+    ("latest_governed_narrative_entries", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM latest_governed_narrative_entries "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("legacy_document_evidence_binding_revisions", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM legacy_document_evidence_binding_revisions "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("legacy_fact_evidence_match_revisions", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM legacy_fact_evidence_match_revisions "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("ocr_page_results", "node_id"): (
+        "SELECT DISTINCT node_id FROM ocr_page_results WHERE node_id IS NOT NULL"
+    ),
+    ("reported_observations", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM reported_observations "
+        "WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("search_chunks", "evidence_node_id"): (
+        "SELECT DISTINCT evidence_node_id FROM search_chunks WHERE evidence_node_id IS NOT NULL"
+    ),
+    ("kpi_definition_revisions", "source_evidence_node_id"): (
+        "SELECT DISTINCT source_evidence_node_id FROM kpi_definition_revisions "
+        "WHERE source_evidence_node_id IS NOT NULL"
+    ),
+    ("kpi_definition_comparability_revisions", "source_evidence_node_id"): (
+        "SELECT DISTINCT source_evidence_node_id FROM kpi_definition_comparability_revisions "
+        "WHERE source_evidence_node_id IS NOT NULL"
+    ),
+}
+
+_CANDIDATE_LEAF_CELLS_SQL = (
+    "SELECT n.extraction_run_id, n.node_id, "
+    "(length(CAST(n.text AS BLOB)) + COALESCE(length(CAST(n.locator_json AS BLOB)), 0) "
+    "+ length(CAST(n.node_id AS BLOB)) + length(CAST(n.evidence_key AS BLOB))) AS approx_bytes "
+    "FROM evidence_nodes AS n "
+    "JOIN evidence_extraction_runs AS r ON r.extraction_run_id = n.extraction_run_id "
+    "WHERE r.extractor_name = ? AND n.node_kind = 'table_cell'"
 )
+
+_SELF_REFERENCED_NODE_IDS_SQL = (
+    "SELECT parent_node_id, supersedes_node_id FROM evidence_nodes "
+    "WHERE parent_node_id IS NOT NULL OR supersedes_node_id IS NOT NULL"
+)
+
+_FETCH_RUN_NODES_SQL = (
+    "SELECT rowid AS native_rowid, node_id, evidence_key, revision, "
+    "extraction_run_id, parent_node_id, supersedes_node_id, node_kind, "
+    "text, locator_json, locator_sha256, recorded_at "
+    "FROM evidence_nodes WHERE extraction_run_id = ? ORDER BY rowid"
+)
+
+_DROP_TRIGGER_SQL: dict[str, str] = {
+    _EVIDENCE_NODE_TRIGGER: ("DROP TRIGGER IF EXISTS trg_evidence_nodes_append_only_delete"),
+    _LEGACY_MATCH_TRIGGER: (
+        "DROP TRIGGER IF EXISTS trg_legacy_fact_evidence_match_revisions_append_only_delete"
+    ),
+    "trg_source_coverage_assessments_append_only_delete": (
+        "DROP TRIGGER IF EXISTS trg_source_coverage_assessments_append_only_delete"
+    ),
+    "trg_expected_document_obligation_bindings_append_only_delete": (
+        "DROP TRIGGER IF EXISTS trg_expected_document_obligation_bindings_append_only_delete"
+    ),
+    "trg_expected_document_lifecycle_revisions_append_only_delete": (
+        "DROP TRIGGER IF EXISTS trg_expected_document_lifecycle_revisions_append_only_delete"
+    ),
+    "trg_expected_documents_append_only_delete": (
+        "DROP TRIGGER IF EXISTS trg_expected_documents_append_only_delete"
+    ),
+}
+
+_FK_CHECK_SQL: dict[str, str] = {
+    "evidence_nodes": "PRAGMA foreign_key_check(evidence_nodes)",
+    "evidence_node_external_archives": "PRAGMA foreign_key_check(evidence_node_external_archives)",
+    "source_coverage_assessments": "PRAGMA foreign_key_check(source_coverage_assessments)",
+    "expected_document_obligation_bindings": (
+        "PRAGMA foreign_key_check(expected_document_obligation_bindings)"
+    ),
+    "expected_document_lifecycle_revisions": (
+        "PRAGMA foreign_key_check(expected_document_lifecycle_revisions)"
+    ),
+    "expected_documents": "PRAGMA foreign_key_check(expected_documents)",
+    "filing_sections": "PRAGMA foreign_key_check(filing_sections)",
+    "legacy_fact_evidence_match_revisions": (
+        "PRAGMA foreign_key_check(legacy_fact_evidence_match_revisions)"
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _ChainTableSpec:
+    table: str
+    select_links_sql: str
+    delete_by_pk_sql: str
+
+
+_CHAIN_SPECS: dict[str, _ChainTableSpec] = {
+    "source_coverage_assessments": _ChainTableSpec(
+        table="source_coverage_assessments",
+        select_links_sql=(
+            "SELECT assessment_id, supersedes_assessment_id, expected_document_id "
+            "FROM source_coverage_assessments"
+        ),
+        delete_by_pk_sql="DELETE FROM source_coverage_assessments WHERE assessment_id = ?",
+    ),
+    "expected_document_lifecycle_revisions": _ChainTableSpec(
+        table="expected_document_lifecycle_revisions",
+        select_links_sql=(
+            "SELECT lifecycle_id, supersedes_lifecycle_id, expected_document_id "
+            "FROM expected_document_lifecycle_revisions"
+        ),
+        delete_by_pk_sql="DELETE FROM expected_document_lifecycle_revisions WHERE lifecycle_id = ?",
+    ),
+    "legacy_fact_evidence_match_revisions": _ChainTableSpec(
+        table="legacy_fact_evidence_match_revisions",
+        select_links_sql=(
+            "SELECT match_revision_id, supersedes_match_revision_id, NULL "
+            "FROM legacy_fact_evidence_match_revisions"
+        ),
+        delete_by_pk_sql="DELETE FROM legacy_fact_evidence_match_revisions WHERE match_revision_id = ?",
+    ),
+}
 
 EventLogger = Callable[..., None]
 
@@ -92,40 +223,41 @@ def _existing_tables(conn: sqlite3.Connection) -> set[str]:
     }
 
 
+def _existing_views(conn: sqlite3.Connection) -> set[str]:
+    return {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'view'").fetchall()
+    }
+
+
 def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {
         str(row[1]) for row in conn.execute(f"PRAGMA table_info({_quote_ident(table)})").fetchall()
     }
 
 
-def _discover_external_fk_refs(
+def _discover_incoming_fk_refs(
     conn: sqlite3.Connection,
     target_table: str,
-    *,
-    extra_named: Sequence[tuple[str, str]] = (),
-    exclude_tables: set[str] | None = None,
-) -> tuple[tuple[str, str], ...]:
-    tables = _existing_tables(conn)
-    excluded = exclude_tables or set()
+) -> set[tuple[str, str]]:
     refs: set[tuple[str, str]] = set()
-    for table_name, col_name in extra_named:
-        if (
-            table_name in tables
-            and table_name not in excluded
-            and col_name in _existing_columns(conn, table_name)
-        ):
-            refs.add((table_name, col_name))
-    for table_name in sorted(tables):
-        if table_name == target_table or table_name in excluded:
+    for table_name in sorted(_existing_tables(conn)):
+        if table_name == target_table:
             continue
         for fk in conn.execute(f"PRAGMA foreign_key_list({_quote_ident(table_name)})").fetchall():
             if str(fk[2]) == target_table:
                 refs.add((table_name, str(fk[3])))
-    return tuple(sorted(refs))
+    return refs
 
 
-def _chunked(items: Sequence[str] | Sequence[int], size: int) -> Iterator[Sequence[object]]:
-    step = max(1, min(size, _MAX_SQLITE_BIND_VARS))
+def _chunked_str(items: Sequence[str], size: int) -> Iterator[Sequence[str]]:
+    step = max(1, size)
+    for offset in range(0, len(items), step):
+        yield items[offset : offset + step]
+
+
+def _chunked_int(items: Sequence[int], size: int) -> Iterator[Sequence[int]]:
+    step = max(1, size)
     for offset in range(0, len(items), step):
         yield items[offset : offset + step]
 
@@ -153,11 +285,13 @@ def _verify_triggers_present(conn: sqlite3.Connection, expected: Sequence[tuple[
 def _maintenance_transaction(
     conn: sqlite3.Connection, trigger_names: Sequence[str]
 ) -> Generator[None]:
-    """Drop named delete triggers, execute maintenance inside BEGIN IMMEDIATE, and restore verbatim."""
+    """Drop allowlisted delete triggers, execute inside BEGIN IMMEDIATE, and restore verbatim."""
     if conn.in_transaction:
         raise RuntimeError("maintenance transaction requires an idle SQLite connection")
     captured: list[tuple[str, str]] = []
     for name in trigger_names:
+        if name not in _DROP_TRIGGER_SQL:
+            raise RuntimeError(f"refusing to manage unregistered trigger: {name}")
         sql = _capture_trigger_sql(conn, name)
         if sql is not None:
             captured.append((name, sql))
@@ -168,7 +302,7 @@ def _maintenance_transaction(
         conn.execute("BEGIN IMMEDIATE")
         try:
             for name, _ in captured:
-                conn.execute(f"DROP TRIGGER IF EXISTS {_quote_ident(name)}")
+                conn.execute(_DROP_TRIGGER_SQL[name])
             yield
             for _, sql in captured:
                 conn.execute(sql)
@@ -184,9 +318,39 @@ def _maintenance_transaction(
 
 
 def _check_table_foreign_keys(conn: sqlite3.Connection, table: str) -> None:
-    violation = conn.execute(f"PRAGMA foreign_key_check({_quote_ident(table)})").fetchone()
+    sql = _FK_CHECK_SQL.get(table)
+    if sql is None:
+        raise RuntimeError(f"unregistered table for foreign-key check: {table}")
+    violation = conn.execute(sql).fetchone()
     if violation is not None:
         raise RuntimeError(f"foreign-key verification failed on {table}: {tuple(violation)!r}")
+
+
+def _collect_referenced_evidence_node_ids(conn: sqlite3.Connection) -> set[str]:
+    tables = _existing_tables(conn)
+    discovered = _discover_incoming_fk_refs(conn, "evidence_nodes")
+    unregistered = discovered - set(_EVIDENCE_NODE_FK_QUERIES)
+    if unregistered:
+        formatted = ", ".join(f"{t}.{c}" for t, c in sorted(unregistered))
+        raise RuntimeError(
+            f"unregistered FK reference(s) to evidence_nodes cannot be compacted safely: {formatted}"
+        )
+
+    referenced: set[str] = set()
+    # O(N) linear scan for self-referential parent/supersedes links (unindexed columns).
+    for row in conn.execute(_SELF_REFERENCED_NODE_IDS_SQL).fetchall():
+        if row[0] is not None:
+            referenced.add(str(row[0]))
+        if row[1] is not None:
+            referenced.add(str(row[1]))
+
+    for (table_name, col_name), query_sql in _EVIDENCE_NODE_FK_QUERIES.items():
+        if table_name not in tables or col_name not in _existing_columns(conn, table_name):
+            continue
+        for row in conn.execute(query_sql).fetchall():
+            if row[0] is not None:
+                referenced.add(str(row[0]))
+    return referenced
 
 
 def _select_eligible_leaf_table_cells(
@@ -197,68 +361,40 @@ def _select_eligible_leaf_table_cells(
     if not {"evidence_nodes", "evidence_extraction_runs"} <= tables:
         return {}, 0, 0
 
-    fk_refs = _discover_external_fk_refs(
-        conn, "evidence_nodes", extra_named=_NAMED_EVIDENCE_NODE_FK_REFS
-    )
-    not_exists_clauses = [
-        "NOT EXISTS (SELECT 1 FROM evidence_nodes AS child WHERE child.parent_node_id = n.node_id)",
-        "NOT EXISTS (SELECT 1 FROM evidence_nodes AS newer WHERE newer.supersedes_node_id = n.node_id)",
-    ]
-    for table_name, col_name in fk_refs:
-        qt = _quote_ident(table_name)
-        qc = _quote_ident(col_name)
-        not_exists_clauses.append(
-            f"NOT EXISTS (SELECT 1 FROM {qt} AS ref WHERE ref.{qc} = n.node_id)"
-        )
-
-    already_archived_runs = 0
+    referenced_node_ids = _collect_referenced_evidence_node_ids(conn)
+    archived_runs: set[str] = set()
     if has_external_archives_table(conn):
-        already_archived_runs = int(
-            conn.execute("SELECT COUNT(*) FROM evidence_node_external_archives").fetchone()[0]
-        )
-        not_exists_clauses.append(
-            "NOT EXISTS (SELECT 1 FROM evidence_node_external_archives AS arch "
-            "WHERE arch.extraction_run_id = n.extraction_run_id)"
-        )
+        archived_runs = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT extraction_run_id FROM evidence_node_external_archives"
+            ).fetchall()
+        }
 
-    predicate = " AND ".join(not_exists_clauses)
-    sql = (
-        "SELECT n.extraction_run_id, n.node_id, "
-        "(length(CAST(n.text AS BLOB)) + COALESCE(length(CAST(n.locator_json AS BLOB)), 0) "
-        "+ length(CAST(n.node_id AS BLOB)) + length(CAST(n.evidence_key AS BLOB))) AS approx_bytes "
-        "FROM evidence_nodes AS n "
-        "JOIN evidence_extraction_runs AS r ON r.extraction_run_id = n.extraction_run_id "
-        "WHERE r.extractor_name = ? AND n.node_kind = 'table_cell' AND "
-        + predicate
-        + " ORDER BY n.extraction_run_id, n.rowid"
-    )
-    rows = conn.execute(sql, (_FULLTEXT_EXTRACTOR_NAME,)).fetchall()  # nosec B608 -- validated sqlite_schema identifiers; bound params
+    rows = conn.execute(_CANDIDATE_LEAF_CELLS_SQL, (_FULLTEXT_EXTRACTOR_NAME,)).fetchall()
     by_run: dict[str, list[str]] = {}
     estimated_bytes = 0
     for row in rows:
         run_id = str(row[0])
         node_id = str(row[1])
+        if run_id in archived_runs or node_id in referenced_node_ids:
+            continue
         estimated_bytes += int(row[2] or 0)
         by_run.setdefault(run_id, []).append(node_id)
-    return by_run, estimated_bytes, already_archived_runs
+    return by_run, estimated_bytes, len(archived_runs)
 
 
 def _fetch_run_nodes_by_ids(
     conn: sqlite3.Connection, extraction_run_id: str, node_ids: Sequence[str]
 ) -> list[dict[str, object]]:
-    fetched: list[dict[str, object]] = []
-    for batch in _chunked(node_ids, _MAX_SQLITE_BIND_VARS):
-        placeholders = ",".join("?" for _ in batch)
-        cursor = conn.execute(
-            "SELECT rowid AS native_rowid, node_id, evidence_key, revision, "  # nosec B608 -- placeholder count only; all values bound
-            "extraction_run_id, parent_node_id, supersedes_node_id, node_kind, "
-            "text, locator_json, locator_sha256, recorded_at "
-            f"FROM evidence_nodes WHERE extraction_run_id = ? AND node_id IN ({placeholders}) "
-            "ORDER BY rowid",
-            (extraction_run_id, *batch),
-        )
-        names = tuple(col[0] for col in cursor.description or ())
-        fetched.extend(dict(zip(names, tuple(row), strict=True)) for row in cursor.fetchall())
+    target = set(node_ids)
+    cursor = conn.execute(_FETCH_RUN_NODES_SQL, (extraction_run_id,))
+    names = tuple(col[0] for col in cursor.description or ())
+    fetched = [
+        dict(zip(names, tuple(row), strict=True))
+        for row in cursor.fetchall()
+        if str(row[1]) in target
+    ]
     fetched.sort(key=lambda item: (cast(int, item["native_rowid"]), str(item["node_id"])))
     return fetched
 
@@ -327,12 +463,10 @@ def _run_step_a(
                 ),
             )
             run_deleted = 0
-            for batch in _chunked(node_ids, options.batch_size):
-                placeholders = ",".join("?" for _ in batch)
-                cur = conn.execute(
-                    f"DELETE FROM evidence_nodes WHERE extraction_run_id = ? "  # nosec B608 -- placeholder count only; all values bound
-                    f"AND node_id IN ({placeholders})",
-                    (extraction_run_id, *batch),
+            for batch in _chunked_str(node_ids, options.batch_size):
+                cur = conn.executemany(
+                    "DELETE FROM evidence_nodes WHERE extraction_run_id = ? AND node_id = ?",
+                    [(extraction_run_id, node_id) for node_id in batch],
                 )
                 run_deleted += cur.rowcount
             if run_deleted != len(node_ids):
@@ -363,8 +497,7 @@ def _run_step_a(
 
 
 def _active_ticker_roles(conn: sqlite3.Connection) -> tuple[set[str], set[str]]:
-    tables = _existing_tables(conn)
-    if "tracked_companies" not in tables:
+    if "tracked_companies" not in _existing_tables(conn):
         return set(), set()
     rows = conn.execute(
         "SELECT UPPER(TRIM(ticker)), list_type FROM tracked_companies WHERE archived_at IS NULL"
@@ -419,122 +552,119 @@ def _select_prunable_expected_documents(conn: sqlite3.Connection) -> list[str]:
     if not eligible_issuers:
         return []
 
-    managed_children = {
-        "source_coverage_assessments",
-        "expected_document_obligation_bindings",
-        "expected_document_lifecycle_revisions",
+    known_expected_doc_refs = {
+        ("source_coverage_assessments", "expected_document_id"),
+        ("expected_document_obligation_bindings", "expected_document_id"),
+        ("expected_document_lifecycle_revisions", "expected_document_id"),
+        ("latest_governed_document_entries", "expected_document_id"),
     }
-    extra_protected: list[tuple[str, str]] = []
+    unregistered = _discover_incoming_fk_refs(conn, "expected_documents") - known_expected_doc_refs
+    if unregistered:
+        formatted = ", ".join(f"{t}.{c}" for t, c in sorted(unregistered))
+        raise RuntimeError(
+            f"unregistered FK reference(s) to expected_documents cannot be pruned safely: {formatted}"
+        )
+
+    protected_ids: set[str] = set()
     if "latest_governed_document_entries" in tables and "expected_document_id" in _existing_columns(
         conn, "latest_governed_document_entries"
     ):
-        extra_protected.append(("latest_governed_document_entries", "expected_document_id"))
-    protected_refs = _discover_external_fk_refs(
-        conn,
-        "expected_documents",
-        extra_named=extra_protected,
-        exclude_tables=managed_children,
-    )
-    protected_clauses = [
-        f"NOT EXISTS (SELECT 1 FROM {_quote_ident(t)} AS ref WHERE ref.{_quote_ident(c)} = ed.expected_document_id)"
-        for t, c in protected_refs
-    ]
-    extra_where = (" AND " + " AND ".join(protected_clauses)) if protected_clauses else ""
+        protected_ids = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT expected_document_id FROM latest_governed_document_entries "
+                "WHERE expected_document_id IS NOT NULL"
+            ).fetchall()
+        }
 
-    eligible_ids: list[str] = []
-    for issuer_batch in _chunked(sorted(eligible_issuers), _MAX_SQLITE_BIND_VARS):
-        placeholders = ",".join("?" for _ in issuer_batch)
-        rows = conn.execute(
-            f"SELECT ed.expected_document_id FROM expected_documents AS ed "  # nosec B608 -- validated sqlite_schema identifiers; bound params
-            f"WHERE ed.issuer_id IN ({placeholders}){extra_where} "
-            "ORDER BY ed.expected_document_id",
-            tuple(issuer_batch),
+    return [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT expected_document_id, issuer_id FROM expected_documents "
+            "ORDER BY expected_document_id"
         ).fetchall()
-        eligible_ids.extend(str(row[0]) for row in rows)
-    return eligible_ids
+        if str(row[1]) in eligible_issuers and str(row[0]) not in protected_ids
+    ]
 
 
-def _collect_dependent_chain_ids(
+def _collect_chain_rows(
     conn: sqlite3.Connection,
     table: str,
-    pk_col: str,
-    parent_col: str,
-    fk_col: str,
-    fk_ids: Sequence[str],
-) -> list[str]:
+    fk_ids: set[str],
+) -> tuple[list[str], dict[str, str | None]]:
+    """Return (ordered_target_ids, parent_by_id) for all rows referencing ``fk_ids`` + descendants."""
     if table not in _existing_tables(conn) or not fk_ids:
-        return []
-    qt, qpk, qparent, qfk = (
-        _quote_ident(table),
-        _quote_ident(pk_col),
-        _quote_ident(parent_col),
-        _quote_ident(fk_col),
-    )
+        return [], {}
+    spec = _CHAIN_SPECS[table]
+    parent_by_id: dict[str, str | None] = {}
+    children_by_parent: dict[str, list[str]] = {}
     seed_ids: set[str] = set()
-    for batch in _chunked(fk_ids, _MAX_SQLITE_BIND_VARS):
-        placeholders = ",".join("?" for _ in batch)
-        rows = conn.execute(
-            f"SELECT {qpk} FROM {qt} WHERE {qfk} IN ({placeholders})",  # nosec B608 -- trusted internal constants; bound params
-            tuple(batch),
-        ).fetchall()
-        seed_ids.update(str(row[0]) for row in rows)
-    if not seed_ids:
-        return []
+    for row in conn.execute(spec.select_links_sql).fetchall():
+        pk = str(row[0])
+        parent = None if row[1] is None else str(row[1])
+        fk_val = None if row[2] is None else str(row[2])
+        parent_by_id[pk] = parent
+        if parent is not None:
+            children_by_parent.setdefault(parent, []).append(pk)
+        if fk_val is not None and fk_val in fk_ids:
+            seed_ids.add(pk)
 
     collected = set(seed_ids)
-    frontier = sorted(seed_ids)
+    frontier = list(seed_ids)
     while frontier:
-        next_frontier: list[str] = []
-        for batch in _chunked(frontier, _MAX_SQLITE_BIND_VARS):
-            placeholders = ",".join("?" for _ in batch)
-            rows = conn.execute(
-                f"SELECT {qpk} FROM {qt} WHERE {qparent} IN ({placeholders})",  # nosec B608 -- trusted internal constants; bound params
-                tuple(batch),
-            ).fetchall()
-            for row in rows:
-                child_id = str(row[0])
-                if child_id not in collected:
-                    collected.add(child_id)
-                    next_frontier.append(child_id)
-        frontier = next_frontier
-    return sorted(collected)
+        current = frontier.pop()
+        for child in children_by_parent.get(current, ()):
+            if child not in collected:
+                collected.add(child)
+                frontier.append(child)
+    return sorted(collected), parent_by_id
 
 
 def _delete_chain_leaf_to_root(
     conn: sqlite3.Connection,
     table: str,
-    pk_col: str,
-    parent_col: str,
     target_ids: Sequence[str],
+    parent_by_id: dict[str, str | None],
     batch_size: int,
 ) -> int:
+    """Delete ``target_ids`` leaf-to-root using static SQL so self-referential FKs never fail."""
     if not target_ids:
         return 0
-    qt, qpk, qparent = _quote_ident(table), _quote_ident(pk_col), _quote_ident(parent_col)
+    spec = _CHAIN_SPECS[table]
     remaining = set(target_ids)
+    # Also ensure no surviving row outside target_ids points at any row in remaining.
+    external_parents = {
+        parent for pk, parent in parent_by_id.items() if pk not in remaining and parent is not None
+    }
+    if remaining & external_parents:
+        raise RuntimeError(f"cannot prune {table}: retained row(s) reference target parent(s)")
+
+    # O(N) topological peel (leaf-to-root) using child-reference counts.
+    child_count: dict[str, int] = dict.fromkeys(remaining, 0)
+    for pk in remaining:
+        parent = parent_by_id.get(pk)
+        if parent is not None and parent in child_count:
+            child_count[parent] += 1
+
+    ready = sorted(pk for pk, count in child_count.items() if count == 0)
     total_deleted = 0
     while remaining:
-        leaves: list[str] = []
-        for batch in _chunked(sorted(remaining), _MAX_SQLITE_BIND_VARS):
-            placeholders = ",".join("?" for _ in batch)
-            rows = conn.execute(
-                f"SELECT t.{qpk} FROM {qt} AS t WHERE t.{qpk} IN ({placeholders}) "  # nosec B608 -- trusted internal constants; bound params
-                f"AND NOT EXISTS (SELECT 1 FROM {qt} AS c WHERE c.{qparent} = t.{qpk})",
-                tuple(batch),
-            ).fetchall()
-            leaves.extend(str(row[0]) for row in rows)
-        if not leaves:
+        if not ready:
             raise RuntimeError(
                 f"unable to make leaf-to-root progress deleting from {table} ({len(remaining)} remaining)"
             )
-        for batch in _chunked(leaves, batch_size):
-            placeholders = ",".join("?" for _ in batch)
-            cur = conn.execute(
-                f"DELETE FROM {qt} WHERE {qpk} IN ({placeholders})",  # nosec B608 -- trusted internal constants; bound params
-                tuple(batch),
-            )
+        next_ready: list[str] = []
+        for batch in _chunked_str(ready, batch_size):
+            cur = conn.executemany(spec.delete_by_pk_sql, [(pk,) for pk in batch])
             total_deleted += cur.rowcount
-        remaining.difference_update(leaves)
+            for pk in batch:
+                remaining.discard(pk)
+                parent = parent_by_id.get(pk)
+                if parent is not None and parent in child_count:
+                    child_count[parent] -= 1
+                    if child_count[parent] == 0:
+                        next_ready.append(parent)
+        ready = sorted(next_ready)
     return total_deleted
 
 
@@ -546,32 +676,24 @@ def _run_step_b_coverage(
 
     tables = _existing_tables(conn)
     expected_doc_ids = _select_prunable_expected_documents(conn)
-    assessment_ids = _collect_dependent_chain_ids(
-        conn,
-        "source_coverage_assessments",
-        "assessment_id",
-        "supersedes_assessment_id",
-        "expected_document_id",
-        expected_doc_ids,
+    expected_doc_set = set(expected_doc_ids)
+
+    assessment_ids, assessment_parents = _collect_chain_rows(
+        conn, "source_coverage_assessments", expected_doc_set
     )
-    lifecycle_ids = _collect_dependent_chain_ids(
-        conn,
-        "expected_document_lifecycle_revisions",
-        "lifecycle_id",
-        "supersedes_lifecycle_id",
-        "expected_document_id",
-        expected_doc_ids,
+    lifecycle_ids, lifecycle_parents = _collect_chain_rows(
+        conn, "expected_document_lifecycle_revisions", expected_doc_set
     )
     binding_ids: list[str] = []
-    if "expected_document_obligation_bindings" in tables and expected_doc_ids:
-        for batch in _chunked(expected_doc_ids, _MAX_SQLITE_BIND_VARS):
-            placeholders = ",".join("?" for _ in batch)
-            rows = conn.execute(
-                "SELECT binding_id FROM expected_document_obligation_bindings "  # nosec B608 -- placeholder count only; bound params
-                f"WHERE expected_document_id IN ({placeholders}) ORDER BY binding_id",
-                tuple(batch),
+    if "expected_document_obligation_bindings" in tables and expected_doc_set:
+        binding_ids = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT binding_id, expected_document_id "
+                "FROM expected_document_obligation_bindings ORDER BY binding_id"
             ).fetchall()
-            binding_ids.extend(str(row[0]) for row in rows)
+            if str(row[1]) in expected_doc_set
+        ]
 
     result: dict[str, object] = {
         "enabled": True,
@@ -592,35 +714,29 @@ def _run_step_b_coverage(
         del_assessments = _delete_chain_leaf_to_root(
             conn,
             "source_coverage_assessments",
-            "assessment_id",
-            "supersedes_assessment_id",
             assessment_ids,
+            assessment_parents,
             options.batch_size,
         )
         del_bindings = 0
-        for batch in _chunked(binding_ids, options.batch_size):
-            placeholders = ",".join("?" for _ in batch)
-            cur = conn.execute(
-                "DELETE FROM expected_document_obligation_bindings "  # nosec B608 -- placeholder count only; bound params
-                f"WHERE binding_id IN ({placeholders})",
-                tuple(batch),
+        for batch in _chunked_str(binding_ids, options.batch_size):
+            cur = conn.executemany(
+                "DELETE FROM expected_document_obligation_bindings WHERE binding_id = ?",
+                [(bid,) for bid in batch],
             )
             del_bindings += cur.rowcount
         del_lifecycle = _delete_chain_leaf_to_root(
             conn,
             "expected_document_lifecycle_revisions",
-            "lifecycle_id",
-            "supersedes_lifecycle_id",
             lifecycle_ids,
+            lifecycle_parents,
             options.batch_size,
         )
         del_expected = 0
-        for batch in _chunked(expected_doc_ids, options.batch_size):
-            placeholders = ",".join("?" for _ in batch)
-            cur = conn.execute(
-                "DELETE FROM expected_documents "  # nosec B608 -- placeholder count only; bound params
-                f"WHERE expected_document_id IN ({placeholders})",
-                tuple(batch),
+        for batch in _chunked_str(expected_doc_ids, options.batch_size):
+            cur = conn.executemany(
+                "DELETE FROM expected_documents WHERE expected_document_id = ?",
+                [(ed_id,) for ed_id in batch],
             )
             del_expected += cur.rowcount
 
@@ -647,7 +763,8 @@ def _run_step_b_filing_sections(
 ) -> dict[str, object]:
     if not options.prune_inactive_filing_sections:
         return {"enabled": False}
-    if "filing_sections" not in _existing_tables(conn):
+    tables = _existing_tables(conn)
+    if "filing_sections" not in tables:
         return {
             "enabled": True,
             "eligible_rows": 0,
@@ -656,15 +773,33 @@ def _run_step_b_filing_sections(
         }
 
     index_only_tickers, _ = _active_ticker_roles(conn)
-    eligible_ids: list[int] = []
-    estimated_bytes = 0
-    for row in conn.execute(
-        "SELECT id, UPPER(TRIM(ticker)), is_active, length(CAST(text AS BLOB)) "
-        "FROM filing_sections ORDER BY id"
-    ).fetchall():
-        if int(row[2]) == 0 or str(row[1] or "") in index_only_tickers:
-            eligible_ids.append(int(row[0]))
-            estimated_bytes += int(row[3] or 0)
+    views = _existing_views(conn)
+    eligible_bytes_by_id: dict[int, int] = {}
+
+    # 1. Inactive rows via the migration-0072 v_inactive_filing_sections view.
+    if "v_inactive_filing_sections" in views:
+        for row in conn.execute(
+            "SELECT id, length(CAST(text AS BLOB)) FROM v_inactive_filing_sections ORDER BY id"
+        ).fetchall():
+            eligible_bytes_by_id[int(row[0])] = int(row[1] or 0)
+    elif options.apply:
+        raise RuntimeError(
+            "v_inactive_filing_sections view is missing; run `alembic upgrade head` first"
+        )
+
+    # 2. Active rows belonging strictly to index_member-only tickers via provenance.selection.
+    if index_only_tickers:
+        active_relation = selected_filing_sections_relation(conn)
+        if active_relation.sql == "v_active_filing_sections":
+            for row in conn.execute(
+                "SELECT id, UPPER(TRIM(ticker)), length(CAST(text AS BLOB)) "
+                "FROM v_active_filing_sections ORDER BY id"
+            ).fetchall():
+                if str(row[1] or "") in index_only_tickers:
+                    eligible_bytes_by_id[int(row[0])] = int(row[2] or 0)
+
+    eligible_ids = sorted(eligible_bytes_by_id)
+    estimated_bytes = sum(eligible_bytes_by_id.values())
 
     result: dict[str, object] = {
         "enabled": True,
@@ -679,15 +814,10 @@ def _run_step_b_filing_sections(
     prev_isolation = conn.isolation_level
     conn.isolation_level = None
     try:
-        for batch in _chunked(eligible_ids, options.batch_size):
-            placeholders = ",".join("?" for _ in batch)
+        for batch in _chunked_int(eligible_ids, options.batch_size):
             conn.execute("BEGIN IMMEDIATE")
             try:
-                cur = conn.execute(
-                    f"DELETE FROM filing_sections WHERE id IN ({placeholders})",  # nosec B608 -- placeholder count only; bound params
-                    tuple(batch),
-                )
-                deleted += cur.rowcount
+                deleted += delete_sections_by_ids(conn, batch)
                 conn.execute("COMMIT")
             except BaseException:
                 if conn.in_transaction:
@@ -702,51 +832,72 @@ def _run_step_b_filing_sections(
     return result
 
 
-def _select_prunable_legacy_matches(conn: sqlite3.Connection) -> tuple[list[str], int]:
+def _select_prunable_legacy_matches(
+    conn: sqlite3.Connection,
+) -> tuple[list[str], dict[str, str | None], int]:
     tables = _existing_tables(conn)
     if "legacy_fact_evidence_match_revisions" not in tables:
-        return [], 0
+        return [], {}, 0
 
-    base_clauses = ["m.outcome = 'accepted'"]
+    known_legacy_match_refs = {
+        ("fact_observation_match_proofs", "match_revision_id"),
+        ("fact_observations_v2", "legacy_match_revision_id"),
+    }
+    unregistered = (
+        _discover_incoming_fk_refs(conn, "legacy_fact_evidence_match_revisions")
+        - known_legacy_match_refs
+    )
+    if unregistered:
+        formatted = ", ".join(f"{t}.{c}" for t, c in sorted(unregistered))
+        raise RuntimeError(
+            f"unregistered FK reference(s) to legacy_fact_evidence_match_revisions: {formatted}"
+        )
+
+    retained_seed: set[str] = set()
     if "fact_observation_match_proofs" in tables:
-        base_clauses.append(
-            "EXISTS (SELECT 1 FROM fact_observation_match_proofs AS p "
-            "WHERE p.match_revision_id = m.match_revision_id)"
+        retained_seed.update(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT match_revision_id FROM fact_observation_match_proofs "
+                "WHERE match_revision_id IS NOT NULL"
+            ).fetchall()
         )
     if "fact_observations_v2" in tables:
-        base_clauses.append(
-            "EXISTS (SELECT 1 FROM fact_observations_v2 AS f "
-            "WHERE f.legacy_match_revision_id = m.match_revision_id)"
-        )
-    for table_name, col_name in _discover_external_fk_refs(
-        conn,
-        "legacy_fact_evidence_match_revisions",
-        exclude_tables={"fact_observation_match_proofs", "fact_observations_v2"},
-    ):
-        base_clauses.append(
-            f"EXISTS (SELECT 1 FROM {_quote_ident(table_name)} AS ref "
-            f"WHERE ref.{_quote_ident(col_name)} = m.match_revision_id)"
+        retained_seed.update(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT legacy_match_revision_id FROM fact_observations_v2 "
+                "WHERE legacy_match_revision_id IS NOT NULL"
+            ).fetchall()
         )
 
-    sql = (
-        "WITH RECURSIVE retained(match_revision_id) AS ("
-        "  SELECT m.match_revision_id FROM legacy_fact_evidence_match_revisions AS m "
-        f"  WHERE {' OR '.join(base_clauses)} "
-        "  UNION "
-        "  SELECT parent.supersedes_match_revision_id "
-        "  FROM legacy_fact_evidence_match_revisions AS parent "
-        "  JOIN retained ON retained.match_revision_id = parent.match_revision_id "
-        "  WHERE parent.supersedes_match_revision_id IS NOT NULL"
-        ") "
-        "SELECT m.match_revision_id, "
-        "(length(CAST(m.fact_payload_json AS BLOB)) + length(CAST(m.candidate_manifest_json AS BLOB)) "
-        "+ length(CAST(m.reason_details_json AS BLOB))) AS approx_bytes "
-        "FROM legacy_fact_evidence_match_revisions AS m "
-        "WHERE m.match_revision_id NOT IN (SELECT match_revision_id FROM retained) "
-        "ORDER BY m.match_revision_id"
-    )
-    rows = conn.execute(sql).fetchall()  # nosec B608 -- validated sqlite_schema identifiers only
-    return [str(row[0]) for row in rows], sum(int(row[1] or 0) for row in rows)
+    parent_by_id: dict[str, str | None] = {}
+    bytes_by_id: dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT match_revision_id, supersedes_match_revision_id, outcome, "
+        "(length(CAST(fact_payload_json AS BLOB)) + length(CAST(candidate_manifest_json AS BLOB)) "
+        "+ length(CAST(reason_details_json AS BLOB))) AS approx_bytes "
+        "FROM legacy_fact_evidence_match_revisions ORDER BY match_revision_id"
+    ).fetchall():
+        mid = str(row[0])
+        parent_by_id[mid] = None if row[1] is None else str(row[1])
+        bytes_by_id[mid] = int(row[3] or 0)
+        if str(row[2]) == "accepted":
+            retained_seed.add(mid)
+
+    # Compute transitive closure of retained rows along supersedes_match_revision_id.
+    retained = set(retained_seed)
+    frontier = list(retained_seed)
+    while frontier:
+        current = frontier.pop()
+        parent = parent_by_id.get(current)
+        if parent is not None and parent not in retained:
+            retained.add(parent)
+            frontier.append(parent)
+
+    prunable = sorted(mid for mid in parent_by_id if mid not in retained)
+    estimated_bytes = sum(bytes_by_id[mid] for mid in prunable)
+    return prunable, parent_by_id, estimated_bytes
 
 
 def _run_step_c_legacy_matches(
@@ -755,7 +906,7 @@ def _run_step_c_legacy_matches(
     if not options.prune_unreferenced_legacy_matches:
         return {"enabled": False}
 
-    target_ids, estimated_bytes = _select_prunable_legacy_matches(conn)
+    target_ids, parent_by_id, estimated_bytes = _select_prunable_legacy_matches(conn)
     result: dict[str, object] = {
         "enabled": True,
         "eligible_rows": len(target_ids),
@@ -769,9 +920,8 @@ def _run_step_c_legacy_matches(
         deleted = _delete_chain_leaf_to_root(
             conn,
             "legacy_fact_evidence_match_revisions",
-            "match_revision_id",
-            "supersedes_match_revision_id",
             target_ids,
+            parent_by_id,
             options.batch_size,
         )
 
@@ -857,6 +1007,7 @@ def run_compaction(
         role = SQLiteConnectionRole.WRITER if options.apply else SQLiteConnectionRole.READ_ONLY
         conn = connect_sqlite(options.db_path, role=role, schema_preflight=options.apply)
         try:
+            conn.execute("PRAGMA cache_size = -262144")
             step_a = _run_step_a(conn, options, log_event)
             step_b_coverage = _run_step_b_coverage(conn, options, log_event)
             step_b_sections = _run_step_b_filing_sections(conn, options, log_event)
