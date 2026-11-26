@@ -427,6 +427,122 @@ def test_fetch_qa_falls_back_to_aggregator_roic_and_ingests_without_receipt_id(
         )
 
 
+def test_aggregator_roic_real_index_registration_and_scan_binding(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+) -> None:
+    import index_manager
+    from execution import fetch_qa_transcript as fetch
+    from execution import ingest_transcripts as ingest
+    from pipeline.commitment_scan_receipts import current_transcript_scan_binding
+
+    def validated_transcript(_path: object) -> SimpleNamespace:
+        return SimpleNamespace(status=QaStatus.OK, issues=(), model_dump=qa_dump)
+
+    def qa_dump(**_kwargs: object) -> dict[str, str]:
+        return {"status": "ok"}
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    (repo_root / ".tmp").mkdir(parents=True)
+    (repo_root / "transcripts" / "processed").mkdir(parents=True)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
+        )
+        conn.commit()
+    fetch.RAW_DIR = repo_root / "transcripts" / "raw"
+    fetch.STAGING_DIR = repo_root / ".tmp" / "transcript-acquisition"
+    fetch.STAGING_DIR.mkdir(parents=True)
+
+    monkeypatch.setattr(index_manager, "PROJECT_ROOT", str(repo_root))
+    monkeypatch.setattr(index_manager, "CACHE_DIR", str(repo_root / ".tmp"))
+    monkeypatch.setattr(
+        index_manager,
+        "TRANSCRIPT_INDEX_PATH",
+        str(repo_root / ".tmp" / "transcript_index.json"),
+    )
+    monkeypatch.setattr(
+        index_manager,
+        "DOCUMENT_INDEX_PATH",
+        str(repo_root / ".tmp" / "document_index.json"),
+    )
+    monkeypatch.setattr(index_manager, "TRANSCRIPTS_RAW_DIR", str(fetch.RAW_DIR))
+    monkeypatch.setattr(
+        index_manager,
+        "TRANSCRIPTS_PROCESSED_DIR",
+        str(repo_root / "transcripts" / "processed"),
+    )
+
+    def roic_hit(*_args: object) -> AggregatorHit:
+        return fetch.AggregatorHit(
+            source_name="roic",
+            page_url="https://www.roic.ai/quote/ACME/transcripts/2026-year/2-quarter",
+            qa_text="Operator\nWelcome.\n\nJohn Doe\nOpening comments.\n\nJane Analyst\nQuestion?\n",
+            full_text_chars=90,
+        )
+
+    def no_hit(*_args: object) -> None:
+        return None
+
+    roic_source = next(s for s in fetch.SOURCES if s.provider is TranscriptProvider.ROIC)
+    issuer_source = next(s for s in fetch.SOURCES if s.provider is TranscriptProvider.ISSUER_IR)
+    monkeypatch.setattr(
+        fetch,
+        "SOURCES",
+        (
+            replace(issuer_source, fetch_qa=no_hit),
+            replace(roic_source, fetch_qa=roic_hit),
+        ),
+    )
+    monkeypatch.setattr(fetch, "validate_synthesized_transcript", validated_transcript)
+
+    outcome = fetch.fetch_qa(
+        fetch.FetchQaSpec(ticker="ACME", year=2026, quarter=2),
+        db_path=db_path,
+        owner_requested=True,
+        as_of=date(2026, 8, 12),
+    )
+    assert outcome.status is fetch.FetchQaStatus.ACQUIRED
+    assert outcome.result is not None
+    idx = json.loads((repo_root / ".tmp" / "transcript_index.json").read_text(encoding="utf-8"))
+    assert idx["ACME_2026_Q2"]["source"] == "aggregator_roic"
+    with pytest.raises(
+        ValueError, match="transcript index metadata does not match acquisition receipt"
+    ):
+        index_manager.register_transcript(
+            "ACME",
+            2026,
+            "Q2",
+            source="issuer_ir",
+            filepath="ACME_Q2_2026.txt",
+            acquisition_receipt=outcome.result.acquired_artifact,
+        )
+
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(
+        ingest,
+        "_TRANSCRIPT_DIRS",
+        (repo_root / "transcripts" / "processed", repo_root / "transcripts" / "raw"),
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["ingest_transcripts.py", "--db", str(db_path), "--ticker", "ACME"]
+    )
+    assert ingest.main() == 0
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT id, document_id FROM transcripts WHERE ticker='ACME'").fetchone()
+        assert row is not None
+        binding = current_transcript_scan_binding(conn, int(row["id"]))
+        assert binding is not None
+        assert binding.document_id == int(row["document_id"])
+        assert binding.transcript_acquisition_receipt_id == outcome.result.receipt_id
+
+
 def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
     tmp_path: Path,
     migrated_db: Callable[..., Path],

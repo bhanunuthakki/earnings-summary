@@ -20,6 +20,7 @@ from typing import Any, Literal, TypeAlias, cast
 
 from alias_manager import resolve_ticker
 from pipeline.transcript_acquisition import AuthorizedTranscriptArtifact
+from transcripts.acquisition_semantics import TranscriptProvider
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 CACHE_DIR = os.path.join(PROJECT_ROOT, ".tmp")
@@ -281,11 +282,16 @@ def register_transcript(
     artifact = AuthorizedTranscriptArtifact.model_validate(acquisition_receipt, strict=True)
     request = artifact.authorization.request
     expected_quarter = f"Q{request.fiscal_quarter}"
+    expected_source = (
+        "issuer_ir"
+        if request.provider is TranscriptProvider.ISSUER_IR
+        else f"aggregator_{request.provider.value}"
+    )
     if (
         resolve_ticker(ticker).upper() != request.canonical_ticker
         or int(year) != request.fiscal_year
         or quarter.upper() != expected_quarter
-        or source != "issuer_ir"
+        or source != expected_source
     ):
         raise ValueError("transcript index metadata does not match acquisition receipt")
     return _register_transcript(
