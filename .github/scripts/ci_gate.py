@@ -435,6 +435,21 @@ def regenerate_test_durations(
     }
 
 
+# quality.test_selection.SCANS_REPOSITORY: a file chosen only for this reason
+# reads the whole tree, not code the change alters.
+SCANS_REPOSITORY = "scans the repository"
+
+
+def selected_files(lines: Sequence[str]) -> dict[str, str]:
+    """Each chosen test file of a ``SELECTED`` verdict and why it was chosen."""
+    chosen: dict[str, str] = {}
+    for line in lines[1:]:
+        path, _, reason = line.partition("\t")
+        if path.strip():
+            chosen[path.strip()] = reason.strip()
+    return chosen
+
+
 def test_matrix(lines: Sequence[str], durations: TestDurations) -> tuple[bool, dict[str, object]]:
     """The tests job matrix for a test-selection verdict, and whether any shard runs.
 
@@ -446,7 +461,7 @@ def test_matrix(lines: Sequence[str], durations: TestDurations) -> tuple[bool, d
     full: dict[str, object] = {"include": [{"label": label, "files": ""} for label in SHARD_LABELS]}
     if not lines or not lines[0].startswith("SELECTED"):
         return True, full
-    files = sorted({line.strip() for line in lines[1:] if line.strip()} - {BROWSER_CANARY})
+    files = sorted(set(selected_files(lines)) - {BROWSER_CANARY})
     if not files:
         return False, full
     total = sum(durations.duration_seconds(path) for path in files)
@@ -468,11 +483,17 @@ def windows_app_needed(lines: Sequence[str]) -> bool:
     """Whether the Windows application job runs for a test-selection verdict.
 
     Only a ``SELECTED`` verdict that chose none of ``WINDOWS_APP_TEST_FILES``
-    skips it; every other verdict, including the merge queue's, runs it.
+    for the change itself skips it. A file chosen only because it scans the
+    repository does not count: two of these files do, so every pull request
+    chooses them, and the Linux shards still run them. Every other verdict,
+    including the merge queue's, runs the job.
     """
     if not lines or not lines[0].startswith("SELECTED"):
         return True
-    return any(line.strip() in WINDOWS_APP_TEST_FILES for line in lines[1:])
+    return any(
+        path in WINDOWS_APP_TEST_FILES and reason != SCANS_REPOSITORY
+        for path, reason in selected_files(lines).items()
+    )
 
 
 def gate_failures(

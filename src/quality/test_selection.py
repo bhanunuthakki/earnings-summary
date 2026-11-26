@@ -175,6 +175,10 @@ def _read_texts(root: Path, paths: Iterable[str]) -> dict[str, str]:
     return texts
 
 
+# The reason given to a test file chosen only because it reads the whole tree.
+SCANS_REPOSITORY = "scans the repository"
+
+
 def repository_scanners(texts: Mapping[str, str]) -> set[str]:
     """Test files that read the repository as a whole and so depend on any file."""
     return {path for path, text in texts.items() if is_test_file(path) and _REPO_SCAN.search(text)}
@@ -454,7 +458,7 @@ def select(
         if is_test_file(path) and path in texts:
             why.setdefault(path, "changed")
     for path in repository_scanners(texts):
-        why.setdefault(path, "scans the repository")
+        why.setdefault(path, SCANS_REPOSITORY)
     for path in tests:
         if path not in receipt.tests:
             why.setdefault(path, "not in the receipt")
@@ -588,9 +592,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if selection.full:
         print(f"FULL\t{selection.reason}")
         return 0
+    # One "path<TAB>reason" line per chosen file; the reason also goes to the log.
     print(f"SELECTED\t{selection.reason}")
     for path in selection.files:
-        print(path)
+        print(f"{path}\t{selection.why.get(path, '')}")
         print(f"  {path}: {selection.why.get(path, '')}", file=sys.stderr)
     return 0
 

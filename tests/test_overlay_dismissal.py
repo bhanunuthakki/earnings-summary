@@ -125,8 +125,33 @@ const document = {
 };
 const window = { matchMedia: () => ({ matches: false }), getComputedStyle: e => ({ zIndex: e.style.zIndex || '300' }) };
 global.document = document; global.window = window; global.getComputedStyle = window.getComputedStyle;
+// A virtual clock: sleep(ms) fires every timer due within ms, in due order,
+// without waiting in real time. The overlay's 240 ms close fallback and the
+// harness's ordering are unchanged; only wall-clock waiting is gone, so a
+// slow runner cannot make the race checks time out.
+let clockNow = 0, nextTimerId = 1;
+const timers = [];
+global.setTimeout = (fn, ms) => {
+  const id = nextTimerId++;
+  timers.push({ id, at: clockNow + (ms || 0), fn });
+  return id;
+};
+global.clearTimeout = id => {
+  const index = timers.findIndex(timer => timer.id === id);
+  if (index >= 0) timers.splice(index, 1);
+};
+const sleep = async ms => {
+  const end = clockNow + ms;
+  for (;;) {
+    timers.sort((a, b) => a.at - b.at || a.id - b.id);
+    if (!timers.length || timers[0].at > end) break;
+    const timer = timers.shift();
+    clockNow = timer.at;
+    timer.fn();
+  }
+  clockNow = end;
+};
 eval(OVERLAY_SOURCE);
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
   const opener = element('opener');
   const aEl = element('a'), aClose = element('a-close');

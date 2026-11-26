@@ -306,7 +306,9 @@ def test_selection_measures_from_the_nearest_recorded_ancestor(
         assert test_selection.main(args) == 0
         lines = capsys.readouterr().out.splitlines()
         assert lines[0].startswith("SELECTED")
-        assert set(lines[1:]) == {"tests/test_shared.py", "tests/test_child.py"}
+        chosen = dict(line.split("\t", 1) for line in lines[1:])
+        assert set(chosen) == {"tests/test_shared.py", "tests/test_child.py"}
+        assert all(chosen.values())
         # A receipt from a commit that is not an ancestor still needs every test.
         foreign = root.parent / "foreign.json.gz"
         with gzip.open(receipt, "rt", encoding="utf-8") as handle:
