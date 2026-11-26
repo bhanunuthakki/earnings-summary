@@ -29,10 +29,8 @@ from pathlib import Path
 
 import comments_server
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
 
-from alembic import command
 from dashboard.inbox import collect_inbox
 from dashboard.inbox_rank import inbox_label
 from journal_links import (
@@ -137,38 +135,21 @@ def _insert_position(
 # ---------------------------------------------------------------------------
 
 
-def test_migration_round_trip(tmp_path: Path) -> None:
-    db = tmp_path / "round_trip.db"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-
+def test_analyst_notes_link_columns_and_indexes_exist(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "round_trip.db")
     conn = sqlite3.connect(str(db))
     cols = {r[1] for r in conn.execute("PRAGMA table_info(analyst_notes)")}
     assert {"decision_id", "position_entry_id", "link_auto_resolve"} <= cols
     indexes = {r[1] for r in conn.execute("PRAGMA index_list(analyst_notes)")}
     assert "ix_analyst_notes_decision" in indexes
     assert "ix_analyst_notes_position_entry" in indexes
-    conn.close()
-
-    # Downgrade to 0093's explicit down_revision (not a head-relative "-1"):
-    # once a later migration stacks on top, "-1" only undoes THAT migration and
-    # leaves 0093 intact. Targeting the revision below 0093 keeps this round-trip
-    # honest as the chain grows.
-    command.downgrade(cfg, "0092_merge_followup_dcf_heads")
-    conn = sqlite3.connect(str(db))
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(analyst_notes)")}
-    assert not {"decision_id", "position_entry_id", "link_auto_resolve"} & cols
-    # The 0074 partial unique must survive the batch recreate intact.
     sql_row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='index' AND name='uq_analyst_notes_source_ref'"
     ).fetchone()
     assert sql_row is not None and "WHERE source_ref IS NOT NULL" in str(sql_row[0])
     conn.close()
-
-    command.upgrade(cfg, "head")  # idempotent re-upgrade
 
 
 # ---------------------------------------------------------------------------

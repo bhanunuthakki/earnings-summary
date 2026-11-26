@@ -1,4 +1,4 @@
-"""End-to-end tests for scratch/seed_kpi_registry.py.
+"""End-to-end tests for execution/seed_kpi_registry.py.
 
 Mocks ``seed_kpi_registry.call_llm`` so the suite runs without network
 access. Covers both modes:
@@ -38,9 +38,7 @@ from seed_kpi_registry import (
 
 from user_state import registry
 
-# scratch/ lives at <repo_root>/scratch/. Tests live at <repo_root>/tests/.
-# Insert scratch/ on sys.path so the import below resolves at runtime; pyright
-# resolves it via extraPaths in pyproject.toml.
+# execution/ lives at <repo_root>/execution/ and is on pytest pythonpath & pyright extraPaths.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

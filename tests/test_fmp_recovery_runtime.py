@@ -52,7 +52,7 @@ from pipeline.fmp_recovery import (
     plan_run,
     recoverable_work,
 )
-from provenance import data_backbone_rehearsal, financial_fact_resolution
+from provenance import financial_fact_resolution
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.financial_fact_resolution import (
     governed_document_fact_admission,
@@ -2748,27 +2748,6 @@ def test_raw_corpus_manifest_22k_tiny_files_has_bounded_two_pass_runtime(
         assert elapsed < 300.0
 
     assert not Path(temporary).exists()
-
-
-def test_raw_corpus_manifest_matches_rehearsal_path_order_and_hash(tmp_path: Path) -> None:
-    raw_dir = tmp_path / "fmp"
-    raw_dir.mkdir()
-    (raw_dir / "A_balance_sheet_annual.json").write_bytes(b"[]")
-    (raw_dir / "AAC_balance_sheet_annual.json").write_bytes(b"{}")
-
-    raw_manifest = cast(
-        Callable[[Path], refresh_cache.RawCorpusManifest],
-        getattr(refresh_cache, "_raw_corpus_manifest"),
-    )(raw_dir)
-    rehearsal_manifest = data_backbone_rehearsal.build_corpus_manifest(raw_dir)
-
-    expected_paths = [
-        "AAC_balance_sheet_annual.json",
-        "A_balance_sheet_annual.json",
-    ]
-    assert [entry.relative_path for entry in raw_manifest.entries] == expected_paths
-    assert [entry.relative_path for entry in rehearsal_manifest.entries] == expected_paths
-    assert raw_manifest.manifest_sha256 == rehearsal_manifest.manifest_sha256
 
 
 def test_empty_audit_still_runs_due_open_circuit_backlog_probe(

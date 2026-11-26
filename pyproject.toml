@@ -17,7 +17,6 @@ dev = [
     "sqlalchemy>=2.0",
     "ruff>=0.5",
     "pyright==1.1.414",
-    "basedpyright>=1.10",
 ]
 # IR-document discovery (execution/refresh_ir_kpis.py --discover): a headless
 # browser renders the JS results-center to resolve hash-keyed document URLs.
@@ -28,11 +27,6 @@ ir = [
     # downloader — some issuer hosts (e.g. investor.lilly.com) tarpit any client
     # whose fingerprint isn't a browser's. See fetch_ir_documents._fetch_curl_cffi.
     "curl_cffi>=0.7",
-    # PyMuPDF is the preferred first-page fingerprint extractor in ir_uploads:
-    # markedly faster and far more robust than pypdf on large, graphics-heavy
-    # investor decks (a 200+ page Investor Day deck stalled pypdf for minutes).
-    # Optional — ir_uploads.fingerprint_pdf falls back to pypdf when it's absent.
-    "pymupdf>=1.24",
 ]
 # DCF <-> Google Sheets round-trip (execution/dcf_sheets.py export/import): pushes
 # the DCF workbook to a Google Sheet and pulls the edited Sheet back to recompute.
@@ -51,12 +45,12 @@ gsheets = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
-exclude = ["venv*", "data*", "transcripts*", "ir_documents*", ".tmp*", ".cache*", "scratch*"]
+exclude = ["venv*", "data*", "transcripts*", "ir_documents*", ".tmp*", ".cache*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions"]
+extend-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "alembic/versions"]
 
 [tool.ruff.lint]
 select = [
@@ -111,13 +105,13 @@ include = [
     "src",
     "tests",
 ]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "alembic/versions", "alembic/versions_archived"]
 # `execution` is an import root too: its CLIs import each other as top-level
 # modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
 # without it every such import is an unresolved-import error with a cascade of
 # Unknowns behind it.
-extraPaths = ["src", "execution", "scratch", "cron"]
+extraPaths = ["src", "execution", "cron"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
@@ -137,30 +131,10 @@ reportUnusedFunction = false
 # as the relaxations above); accidental redefinition is still caught in review.
 reportConstantRedefinition = false
 
-[tool.basedpyright]
-include = [
-    ".github/scripts",
-    "alembic",
-    "cron",
-    "evals",
-    "execution",
-    "instruction_tests",
-    "scripts",
-    "src",
-    "tests",
-]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
-extraPaths = ["src", "execution", "scratch", "cron"]
-pythonVersion = "3.11"
-typeCheckingMode = "all"
-reportMissingTypeStubs = false
-reportUnknownMemberType = false
-reportAny = false
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-pythonpath = ["src", "scratch", "execution"]
+pythonpath = ["src", "execution"]
 markers = [
     "unit: Fast unit tests with no DB or network dependency",
     "integration: Subsystem integration tests using SQLite or disk",

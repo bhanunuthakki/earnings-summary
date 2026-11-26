@@ -7,82 +7,382 @@
     "history": "Retained decision/build evidence; never current authority."
   },
   "directives": {
-    "README.md": {"class": "canonical", "summary": "Human routing guide to the machine-readable authority graph.", "authority_domains": ["directive_authority"]},
-    "agent_host_operations.md": {"class": "runbook", "summary": "Host, listener, snapshot and handoff mechanics under configured production authority.", "governed_by": ["folder_structure.md", "operations_governance_surface.md"]},
-    "agent_implementation_traps.md": {"class": "runbook", "summary": "Migration, connection, lineage and resumption failure-prevention mechanics.", "governed_by": ["folder_structure.md", "data_pipeline_dag.md", "data_provenance.md"]},
-    "annual_kpi_cadence_design.md": {"class": "canonical", "summary": "Annual-cadence KPI behavior and data contract.", "authority_domains": ["annual_kpi_cadence"]},
-    "backfill_transcripts.md": {"class": "runbook", "summary": "Transcript and commitment backfill procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "cheapest_model_routing.md": {"class": "canonical", "summary": "Cheapest-at-parity economic routing policy.", "authority_domains": ["model_economics"]},
-    "cio_advisor_governance_2026_06.md": {"class": "history", "summary": "Cross-repository CIO advisor decision record."},
-    "claude_session_bridge.md": {"class": "canonical", "summary": "Deep-session bridge state and persistence boundary.", "authority_domains": ["session_bridge"]},
-    "code_quality_score.md": {"class": "history", "summary": "Frozen deterministic 9+ score oracle history and evidence record; live roadmap owned by Linear/user mandate."},
-    "concepts_spine_decision.md": {"class": "history", "summary": "Concept-spine defer decision record."},
-    "cross_asset_data_model.md": {"class": "draft", "summary": "Cross-asset model scoping and phased proposal."},
-    "data_fixes.md": {"class": "runbook", "summary": "Single-ticker data-correction intake log.", "governed_by": ["data_provenance.md"]},
-    "data_infra_audit_2026_08.md": {"class": "history", "summary": "Dated infrastructure audit and roadmap evidence."},
-    "data_pipeline_dag.md": {"class": "canonical", "summary": "Pipeline stages, identities, resumption, and intermediate-lifecycle contract.", "authority_domains": ["pipeline_orchestration"]},
-    "data_provenance.md": {"class": "canonical", "summary": "Fact and document provenance contract.", "authority_domains": ["data_provenance"]},
-    "db_garbage_collection.md": {"class": "runbook", "summary": "Guarded database garbage-collection procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md", "llm_calls.md", "operations_governance_surface.md"]},
-    "dcf_gsheets_setup.md": {"class": "runbook", "summary": "DCF Google Sheets round-trip procedure.", "governed_by": ["holdings_json_schema.md"]},
-    "design_conformance_audit.md": {"class": "runbook", "summary": "Semantic design-conformance audit procedure.", "governed_by": ["design_language.md"]},
-    "design_language.md": {"class": "canonical", "summary": "Visual system and page-continuity contract.", "authority_domains": ["visual_design"]},
-    "document_tables_design.md": {"class": "draft", "summary": "Document-table extraction design proposal."},
-    "edgar_pipeline.md": {"class": "runbook", "summary": "Continuous EDGAR statement ingestion procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "etf_data.md": {"class": "canonical", "summary": "ETF data-source and persistence contract.", "authority_domains": ["etf_data"]},
-    "fetch_ir_documents.md": {"class": "runbook", "summary": "Investor-relations document fetch procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "fetch_qa_transcript.md": {"class": "runbook", "summary": "Q-and-A transcript fetch procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "fetch_transcripts.md": {"class": "runbook", "summary": "Authorized transcript acquisition procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "fmp_backpop.md": {"class": "runbook", "summary": "Paid FMP backpopulation procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "folder_structure.md": {"class": "canonical", "summary": "Machine-checked repository topology contract.", "authority_domains": ["repository_topology"]},
-    "fund_grade_build_2026_06.md": {"class": "history", "summary": "Completed fund-grade build record."},
-    "gemini_backend.md": {"class": "runbook", "summary": "Gemini adapter setup and failure mechanics.", "governed_by": ["llm_calls.md"]},
-    "history/financial_narrative_grounding_audit_2026_10.md": {"class": "history", "summary": "Dated full-surface financial narrative grounding audit, local template repairs and remaining acceptance gaps."},
-    "history/report_comments_and_chat_2026_06_2026_08.md": {"class": "history", "summary": "Superseded comments and chat design source."},
-    "holdings_json_schema.md": {"class": "canonical", "summary": "Micro-thesis holdings schema contract.", "authority_domains": ["holdings_schema"]},
-    "improvement_roadmap_2026_06.md": {"class": "history", "summary": "Superseded improvement roadmap."},
-    "intake_documents.md": {"class": "runbook", "summary": "User-dropped document intake procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "interaction_contract.md": {"class": "canonical", "summary": "Current interaction behavior boundary.", "authority_domains": ["interaction_behavior"]},
-    "interaction_paradigm_2026_06.md": {"class": "history", "summary": "Completed interaction program record."},
-    "ir_browser_assisted_fetch.md": {"class": "runbook", "summary": "Browser-assisted IR fallback procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "ir_events_ingestion.md": {"class": "draft", "summary": "Unapproved forward IR event ingestion proposal."},
-    "key_metrics_picker.md": {"class": "history", "summary": "Shipped key-metrics picker as-built record."},
-    "llm_calls.md": {"class": "canonical", "summary": "Live LLM call, transport, ledger, and artifact-lifecycle contract.", "authority_domains": ["llm_runtime"]},
-    "llm_evals.md": {"class": "canonical", "summary": "Stage-calibrated LLM quality and failure contract.", "authority_domains": ["llm_quality"]},
-    "llm_evals_plan.md": {"class": "history", "summary": "Completed LLM eval build plan."},
-    "llm_injection_threat_model.md": {"class": "canonical", "summary": "Prompt-injection threat and mitigation contract.", "authority_domains": ["prompt_injection_security"]},
-    "llm_quality_program_2026_07.md": {"class": "history", "summary": "Ratified LLM quality program build record."},
-    "llm_quota_scheduling.md": {"class": "runbook", "summary": "Current LLM quota and protected-window registry.", "governed_by": ["llm_calls.md", "operations_governance_surface.md"]},
-    "history/llm_quota_incidents_2026_07.md": {"class": "history", "summary": "July 2026 quota, proxy, registry-drift, and recovery evidence formerly embedded in the runbook."},
-    "master_build_2026_06.md": {"class": "history", "summary": "Completed master build record."},
-    "meta_eval_governance.md": {"class": "history", "summary": "Optimizer implementation and decision record."},
-    "micro_thesis_runbook.md": {"class": "runbook", "summary": "Micro-thesis review output procedure.", "governed_by": ["holdings_json_schema.md"]},
-    "micro_thesis_skill.md": {"class": "runbook", "summary": "Micro-thesis task routing and workflow.", "governed_by": ["holdings_json_schema.md"]},
-    "model_eval_loop.md": {"class": "canonical", "summary": "Candidate qualification and model promotion contract.", "authority_domains": ["model_qualification"]},
-    "monthly_red_team.md": {"class": "canonical", "summary": "On-demand adversarial portfolio review and response-record contract.", "authority_domains": ["portfolio_red_team"]},
-    "navigation_ia.md": {"class": "draft", "summary": "Non-governing navigation proposal."},
-    "news_sources_plan.md": {"class": "draft", "summary": "News-source pilot evidence and deferred design."},
-    "next_dollar_model.md": {"class": "canonical", "summary": "Current next-dollar factor-library contract.", "authority_domains": ["capital_allocation"]},
-    "nvo_external_sources.md": {"class": "runbook", "summary": "NVO external signal ingestion procedure.", "governed_by": ["per_ticker_enhancements.md", "data_provenance.md"]},
-    "onboard_pending_tickers.md": {"class": "runbook", "summary": "Pending-ticker catch-up procedure.", "governed_by": ["data_pipeline_dag.md", "operations_governance_surface.md"]},
-    "openrouter_backend.md": {"class": "runbook", "summary": "OpenRouter adapter setup and identity mechanics.", "governed_by": ["llm_calls.md"]},
-    "operating_ritual.md": {"class": "runbook", "summary": "Owner's recurring operating loop.", "governed_by": ["interaction_contract.md"]},
-    "operations_governance_surface.md": {"class": "canonical", "summary": "Operations and operator-surface change contract.", "authority_domains": ["operations_surface"]},
-    "peer_selection_llm.md": {"class": "history", "summary": "Shipped peer-selection as-built record."},
-    "per_ticker_enhancements.md": {"class": "canonical", "summary": "Per-ticker extension boundary.", "authority_domains": ["ticker_extensions"]},
-    "per_ticker_segment_extraction_notes.md": {"class": "runbook", "summary": "Ticker-specific segment extraction field notes.", "governed_by": ["per_ticker_enhancements.md", "data_provenance.md"]},
-    "platform_backlog.md": {"class": "history", "summary": "Pre-Linear platform backlog record."},
-    "post_earnings_readout.md": {"class": "runbook", "summary": "Post-earnings readout procedure.", "governed_by": ["llm_calls.md", "data_provenance.md"]},
-    "provenance_override_2026_06.md": {"class": "canonical", "summary": "Company-document fact override contract.", "authority_domains": ["document_fact_override"]},
-    "qa_transcripts.md": {"class": "runbook", "summary": "Transcript validation and cleanup procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md"]},
-    "quarterly_refresh.md": {"class": "runbook", "summary": "Quarterly multi-source refresh procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md", "operations_governance_surface.md"]},
-    "regrade_memo_post_wedge.md": {"class": "history", "summary": "Dated codebase re-grade evidence."},
-    "regrade_memo_v5_independent.md": {"class": "history", "summary": "Dated independent re-grade evidence."},
-    "regrade_memo_v6.md": {"class": "history", "summary": "Dated current-state re-grade evidence."},
-    "report_comments_and_chat.md": {"class": "canonical", "summary": "Current report comments and chat behavior.", "authority_domains": ["report_collaboration"]},
-    "residual_backlog_2026_06.md": {"class": "history", "summary": "Superseded residual backlog snapshot."},
-    "roadmap_2026_08_consolidated.md": {"class": "history", "summary": "Dated roadmap superseded by Linear."},
-    "scenario_prior_cadence.md": {"class": "runbook", "summary": "Scenario-prior refresh cadence procedure.", "governed_by": ["next_dollar_model.md", "llm_calls.md", "operations_governance_surface.md"]},
-    "sec_issuer_identity_reconciliation.md": {"class": "runbook", "summary": "SEC historical and former-ticker identity reconciliation procedure.", "governed_by": ["data_pipeline_dag.md", "data_provenance.md", "operations_governance_surface.md"]},
-    "weekly_cleanup.md": {"class": "runbook", "summary": "Weekly repository and state cleanup procedure.", "governed_by": ["data_pipeline_dag.md", "operations_governance_surface.md"]}
+    "README.md": {
+      "class": "canonical",
+      "summary": "Human routing guide to the machine-readable authority graph.",
+      "authority_domains": [
+        "directive_authority"
+      ]
+    },
+    "agent_host_operations.md": {
+      "class": "runbook",
+      "summary": "Host, listener, snapshot and handoff mechanics under configured production authority.",
+      "governed_by": [
+        "folder_structure.md",
+        "operations_governance_surface.md"
+      ]
+    },
+    "agent_implementation_traps.md": {
+      "class": "runbook",
+      "summary": "Migration, connection, lineage and resumption failure-prevention mechanics.",
+      "governed_by": [
+        "folder_structure.md",
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "annual_kpi_cadence_design.md": {
+      "class": "canonical",
+      "summary": "Annual-cadence KPI behavior and data contract.",
+      "authority_domains": [
+        "annual_kpi_cadence"
+      ]
+    },
+    "backfill_transcripts.md": {
+      "class": "runbook",
+      "summary": "Transcript and commitment backfill procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "cheapest_model_routing.md": {
+      "class": "canonical",
+      "summary": "Cheapest-at-parity economic routing policy.",
+      "authority_domains": [
+        "model_economics"
+      ]
+    },
+    "claude_session_bridge.md": {
+      "class": "canonical",
+      "summary": "Deep-session bridge state and persistence boundary.",
+      "authority_domains": [
+        "session_bridge"
+      ]
+    },
+    "data_fixes.md": {
+      "class": "runbook",
+      "summary": "Single-ticker data-correction intake log.",
+      "governed_by": [
+        "data_provenance.md"
+      ]
+    },
+    "data_pipeline_dag.md": {
+      "class": "canonical",
+      "summary": "Pipeline stages, identities, resumption, and intermediate-lifecycle contract.",
+      "authority_domains": [
+        "pipeline_orchestration"
+      ]
+    },
+    "data_provenance.md": {
+      "class": "canonical",
+      "summary": "Fact and document provenance contract.",
+      "authority_domains": [
+        "data_provenance"
+      ]
+    },
+    "db_garbage_collection.md": {
+      "class": "runbook",
+      "summary": "Guarded database garbage-collection procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md",
+        "llm_calls.md",
+        "operations_governance_surface.md"
+      ]
+    },
+    "dcf_gsheets_setup.md": {
+      "class": "runbook",
+      "summary": "DCF Google Sheets round-trip procedure.",
+      "governed_by": [
+        "holdings_json_schema.md"
+      ]
+    },
+    "design_conformance_audit.md": {
+      "class": "runbook",
+      "summary": "Semantic design-conformance audit procedure.",
+      "governed_by": [
+        "design_language.md"
+      ]
+    },
+    "design_language.md": {
+      "class": "canonical",
+      "summary": "Visual system and page-continuity contract.",
+      "authority_domains": [
+        "visual_design"
+      ]
+    },
+    "edgar_pipeline.md": {
+      "class": "runbook",
+      "summary": "Continuous EDGAR statement ingestion procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "etf_data.md": {
+      "class": "canonical",
+      "summary": "ETF data-source and persistence contract.",
+      "authority_domains": [
+        "etf_data"
+      ]
+    },
+    "fetch_ir_documents.md": {
+      "class": "runbook",
+      "summary": "Investor-relations document fetch procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "fetch_qa_transcript.md": {
+      "class": "runbook",
+      "summary": "Q-and-A transcript fetch procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "fetch_transcripts.md": {
+      "class": "runbook",
+      "summary": "Authorized transcript acquisition procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "fmp_backpop.md": {
+      "class": "runbook",
+      "summary": "Paid FMP backpopulation procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "folder_structure.md": {
+      "class": "canonical",
+      "summary": "Machine-checked repository topology contract.",
+      "authority_domains": [
+        "repository_topology"
+      ]
+    },
+    "gemini_backend.md": {
+      "class": "runbook",
+      "summary": "Gemini adapter setup and failure mechanics.",
+      "governed_by": [
+        "llm_calls.md"
+      ]
+    },
+    "holdings_json_schema.md": {
+      "class": "canonical",
+      "summary": "Micro-thesis holdings schema contract.",
+      "authority_domains": [
+        "holdings_schema"
+      ]
+    },
+    "intake_documents.md": {
+      "class": "runbook",
+      "summary": "User-dropped document intake procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "interaction_contract.md": {
+      "class": "canonical",
+      "summary": "Current interaction behavior boundary.",
+      "authority_domains": [
+        "interaction_behavior"
+      ]
+    },
+    "ir_browser_assisted_fetch.md": {
+      "class": "runbook",
+      "summary": "Browser-assisted IR fallback procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "llm_calls.md": {
+      "class": "canonical",
+      "summary": "Live LLM call, transport, ledger, and artifact-lifecycle contract.",
+      "authority_domains": [
+        "llm_runtime"
+      ]
+    },
+    "llm_evals.md": {
+      "class": "canonical",
+      "summary": "Stage-calibrated LLM quality and failure contract.",
+      "authority_domains": [
+        "llm_quality"
+      ]
+    },
+    "llm_injection_threat_model.md": {
+      "class": "canonical",
+      "summary": "Prompt-injection threat and mitigation contract.",
+      "authority_domains": [
+        "prompt_injection_security"
+      ]
+    },
+    "llm_quota_scheduling.md": {
+      "class": "runbook",
+      "summary": "Current LLM quota and protected-window registry.",
+      "governed_by": [
+        "llm_calls.md",
+        "operations_governance_surface.md"
+      ]
+    },
+    "micro_thesis_runbook.md": {
+      "class": "runbook",
+      "summary": "Micro-thesis review output procedure.",
+      "governed_by": [
+        "holdings_json_schema.md"
+      ]
+    },
+    "micro_thesis_skill.md": {
+      "class": "runbook",
+      "summary": "Micro-thesis task routing and workflow.",
+      "governed_by": [
+        "holdings_json_schema.md"
+      ]
+    },
+    "model_eval_loop.md": {
+      "class": "canonical",
+      "summary": "Candidate qualification and model promotion contract.",
+      "authority_domains": [
+        "model_qualification"
+      ]
+    },
+    "monthly_red_team.md": {
+      "class": "canonical",
+      "summary": "On-demand adversarial portfolio review and response-record contract.",
+      "authority_domains": [
+        "portfolio_red_team"
+      ]
+    },
+    "next_dollar_model.md": {
+      "class": "canonical",
+      "summary": "Current next-dollar factor-library contract.",
+      "authority_domains": [
+        "capital_allocation"
+      ]
+    },
+    "nvo_external_sources.md": {
+      "class": "runbook",
+      "summary": "NVO external signal ingestion procedure.",
+      "governed_by": [
+        "per_ticker_enhancements.md",
+        "data_provenance.md"
+      ]
+    },
+    "onboard_pending_tickers.md": {
+      "class": "runbook",
+      "summary": "Pending-ticker catch-up procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "operations_governance_surface.md"
+      ]
+    },
+    "openrouter_backend.md": {
+      "class": "runbook",
+      "summary": "OpenRouter adapter setup and identity mechanics.",
+      "governed_by": [
+        "llm_calls.md"
+      ]
+    },
+    "operating_ritual.md": {
+      "class": "runbook",
+      "summary": "Owner's recurring operating loop.",
+      "governed_by": [
+        "interaction_contract.md"
+      ]
+    },
+    "operations_governance_surface.md": {
+      "class": "canonical",
+      "summary": "Operations and operator-surface change contract.",
+      "authority_domains": [
+        "operations_surface"
+      ]
+    },
+    "per_ticker_enhancements.md": {
+      "class": "canonical",
+      "summary": "Per-ticker extension boundary.",
+      "authority_domains": [
+        "ticker_extensions"
+      ]
+    },
+    "per_ticker_segment_extraction_notes.md": {
+      "class": "runbook",
+      "summary": "Ticker-specific segment extraction field notes.",
+      "governed_by": [
+        "per_ticker_enhancements.md",
+        "data_provenance.md"
+      ]
+    },
+    "post_earnings_readout.md": {
+      "class": "runbook",
+      "summary": "Post-earnings readout procedure.",
+      "governed_by": [
+        "llm_calls.md",
+        "data_provenance.md"
+      ]
+    },
+    "provenance_override_2026_06.md": {
+      "class": "canonical",
+      "summary": "Company-document fact override contract.",
+      "authority_domains": [
+        "document_fact_override"
+      ]
+    },
+    "qa_transcripts.md": {
+      "class": "runbook",
+      "summary": "Transcript validation and cleanup procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md"
+      ]
+    },
+    "quarterly_refresh.md": {
+      "class": "runbook",
+      "summary": "Quarterly multi-source refresh procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md",
+        "operations_governance_surface.md"
+      ]
+    },
+    "report_comments_and_chat.md": {
+      "class": "canonical",
+      "summary": "Current report comments and chat behavior.",
+      "authority_domains": [
+        "report_collaboration"
+      ]
+    },
+    "scenario_prior_cadence.md": {
+      "class": "runbook",
+      "summary": "Scenario-prior refresh cadence procedure.",
+      "governed_by": [
+        "next_dollar_model.md",
+        "llm_calls.md",
+        "operations_governance_surface.md"
+      ]
+    },
+    "sec_issuer_identity_reconciliation.md": {
+      "class": "runbook",
+      "summary": "SEC historical and former-ticker identity reconciliation procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "data_provenance.md",
+        "operations_governance_surface.md"
+      ]
+    },
+    "weekly_cleanup.md": {
+      "class": "runbook",
+      "summary": "Weekly repository and state cleanup procedure.",
+      "governed_by": [
+        "data_pipeline_dag.md",
+        "operations_governance_surface.md"
+      ]
+    }
   }
 }

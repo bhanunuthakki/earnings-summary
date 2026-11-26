@@ -16,7 +16,7 @@ import pytest
 from flask import Flask
 from pydantic import ValidationError
 
-import execution.comments_server_tracker_routes as tracker_routes
+import cockpit.tracker_routes as tracker_routes
 import execution.serve_portfolio_tracker as tracker_server
 from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch
 from operations import host_runtime

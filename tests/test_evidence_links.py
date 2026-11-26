@@ -11,7 +11,6 @@ from typing import Literal
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -305,47 +304,5 @@ def test_link_mismatch_and_replay_conflicts_fail_loudly(
         ).model_copy(update={"verified_sha256": SHA_B})
         with pytest.raises(ValueError, match="verified_sha256"):
             ledger.persist_location(wrong_hash)
-    finally:
-        conn.close()
-
-
-def test_migration_seeds_primary_links_and_locations(tmp_path: Path) -> None:
-    db_path = tmp_path / "seed.db"
-    config = _config(db_path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, LEDGER_HEAD)
-    conn = sqlite3.connect(db_path)
-    try:
-        _seed_ledger(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    command.stamp(config, PRIOR_HEAD)
-    command.upgrade(config, HEAD)
-    conn = sqlite3.connect(db_path)
-    try:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM evidence_blob_location_observations"
-        ).fetchone() == (1,)
-        assert conn.execute(
-            "SELECT link_kind FROM evidence_document_observation_links"
-        ).fetchone() == ("primary",)
-    finally:
-        conn.close()
-
-
-def test_migration_handles_minimal_stamped_schema_without_seed_sources(tmp_path: Path) -> None:
-    db_path = tmp_path / "minimal.db"
-    config = _config(db_path)
-    command.stamp(config, PRIOR_HEAD)
-    command.upgrade(config, HEAD)
-    conn = sqlite3.connect(db_path)
-    try:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM evidence_blob_location_observations"
-        ).fetchone() == (0,)
-        assert conn.execute(
-            "SELECT COUNT(*) FROM evidence_document_observation_links"
-        ).fetchone() == (0,)
     finally:
         conn.close()

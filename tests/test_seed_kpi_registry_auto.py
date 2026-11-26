@@ -1,4 +1,4 @@
-"""Tests for the ``--auto`` mode of scratch/seed_kpi_registry.py.
+"""Tests for the ``--auto`` mode of execution/seed_kpi_registry.py.
 
 Covers the two correctness mechanisms and the trust gate (plan §4-§8):
 
@@ -30,8 +30,7 @@ from typing import cast
 import pytest
 import yaml
 
-# scratch/ lives at <repo_root>/scratch/; src/ is already on sys.path via the
-# tests' conftest. Insert scratch/ so ``seed_kpi_registry`` imports at runtime.
+# execution/ lives at <repo_root>/execution/ and is on pytest pythonpath & pyright extraPaths.
 from seed_kpi_registry import (
     AutoSeedSummary,
     auto_seed_ticker,

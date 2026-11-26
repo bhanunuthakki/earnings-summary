@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -154,18 +155,8 @@ def _write_weights(repo_root: Path, weights: dict[str, float]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_migration_creates_table(tmp_path: Path) -> None:
-    from alembic.config import Config
-
-    from alembic import command
-
-    project_root = Path(__file__).resolve().parents[1]
-    db = tmp_path / "mig.db"
-    cfg = Config(str(project_root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(project_root / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0194_research_triage")
-    command.upgrade(cfg, "head")
+def test_migration_creates_table(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    db = migrated_db(tmp_path / "mig.db")
 
     conn = sqlite3.connect(str(db))
     try:

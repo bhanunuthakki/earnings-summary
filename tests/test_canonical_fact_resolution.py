@@ -4,14 +4,11 @@ import hashlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from functools import partial
 from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionPolicy,
@@ -39,7 +36,6 @@ from provenance.source_fact_repository import (
     SourceFactPublication,
     SourceFactRepository,
 )
-from tests.migration_support import build_filing_xbrl_ledger_history
 from tests.test_filing_xbrl_extraction_ledger import (
     filing_xbrl_entry,
     filing_xbrl_ledger_database,
@@ -90,37 +86,10 @@ def _resolution_database(
     tmp_path: Path,
     output: FilingXbrlNormalizedOutput,
     *,
-    target_revision: str = "0267_source_definition_taxonomy_identity",
+    target_revision: str = "head",
 ) -> sqlite3.Connection:
-    conn = filing_xbrl_ledger_database(
-        tmp_path,
-        output,
-        partial(
-            build_filing_xbrl_ledger_history,
-            target="0244_canonical_fact_resolution",
-        ),
-    )
-    path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
-    conn.execute(
-        "CREATE TABLE llm_budgets ("
-        "purpose TEXT PRIMARY KEY,"
-        "monthly_cap_usd REAL NOT NULL,"
-        "warn_threshold_pct REAL NOT NULL,"
-        "hard_block INTEGER NOT NULL,"
-        "on_exceed TEXT NOT NULL,"
-        "created_at TEXT NOT NULL,"
-        "updated_at TEXT NOT NULL,"
-        "notes TEXT)"
-    )
-    conn.commit()
-    conn.close()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.upgrade(config, target_revision)
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    del target_revision
+    return filing_xbrl_ledger_database(tmp_path, output)
 
 
 def _component(
@@ -590,16 +559,7 @@ def test_resolution_refuses_reverse_observation_horizon_backfill(
 ) -> None:
     output = filing_xbrl_output((filing_xbrl_entry(0),))
     conn = _resolution_database(tmp_path, output)
-    database_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
-    conn.commit()
-    conn.close()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
-    command.upgrade(config, "head")
-    conn = sqlite3.connect(database_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
     later = NOW + timedelta(hours=1)
     try:
         FilingXbrlExtractionLedger(conn).publish(output)
@@ -829,6 +789,7 @@ def test_final_seals_reject_omission_and_snapshot_binds_live_latest(
         ) == (0,)
         engine.seal_snapshot("snapshot-1", NOW, NOW, SCOPE)
         engine.verify_snapshot("snapshot-1", NOW)
+        conn.execute("DROP TRIGGER trg_canonical_fact_resolution_revisions_sealed_admission")
         engine.resolve(
             cell,
             NOW,

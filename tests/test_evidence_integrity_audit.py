@@ -7,15 +7,14 @@ import json
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
-from alembic.config import Config
 
 import provenance.integrity_audit as integrity_audit
-from alembic import command
 from execution.audit_evidence_integrity import (
     configure_read_only_audit_connection,
     main,
@@ -38,6 +37,14 @@ from provenance.source_inventory_seal import (
     SourceInventorySealStore,
     component_digest,
 )
+
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 class _ResolutionCutoverVerifier(Protocol):
@@ -606,17 +613,131 @@ def test_integrity_auditor_is_directly_executable_from_repo_root() -> None:
 
 
 def test_accepts_empty_complete_evidence_search_schema(tmp_path: Path) -> None:
+    from datetime import UTC
+
+    from search.embedding_eval import (
+        DEFAULT_CANDIDATES,
+        CandidateEvaluationCoordinate,
+        CandidateMetrics,
+        EmbeddingRecommendationArtifact,
+        EvalThresholds,
+    )
+    from search.embedding_promotion import (
+        EmbeddingApprovalReceipt,
+        persist_evaluation_receipt,
+        persist_promotion,
+        promotion_from_evaluation,
+        receipt_from_evaluation,
+    )
+    from search.embedding_runtime_artifact import (
+        EmbeddingRuntimeArtifact,
+        RuntimeArtifactFile,
+        RuntimeComponentVersion,
+    )
+    from search.embedding_runtime_registration import (
+        persist_runtime_registration,
+        registration_from_artifact,
+    )
+    from sqlite_runtime import register_sqlite_integrity_functions
+
+    stamp = datetime(2026, 7, 27, tzinfo=UTC)
     db_path = tmp_path / "complete.db"
-    root = Path(__file__).resolve().parents[1]
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0215_observation_resolution_ledger")
-    command.upgrade(config, "0216_search_corpus_foundation")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
+    models = tuple(sorted(DEFAULT_CANDIDATES))
+    runtimes = {
+        model: registration_from_artifact(
+            EmbeddingRuntimeArtifact(
+                provider="fastembed",
+                model=model,
+                dimensions=768 if "base" in model else 384,
+                execution_provider="CPUExecutionProvider",
+                execution_settings=(),
+                component_versions=(
+                    RuntimeComponentVersion(component="fastembed", version="1.2.3"),
+                ),
+                files=(
+                    RuntimeArtifactFile(
+                        logical_name="model.onnx",
+                        role="model",
+                        size_bytes=3,
+                        sha256=("b" if "base" in model else "c") * 64,
+                    ),
+                ),
+            ),
+            registered_at=stamp,
+            purpose="evidence_vector_retrieval",
+        )
+        for model in models
+    }
+    winner = models[1]
+    winner_runtime = runtimes[winner]
+    eval_artifact = EmbeddingRecommendationArtifact(
+        purpose="evidence_vector_retrieval",
+        golden_sha256="a" * 64,
+        k=10,
+        thresholds=EvalThresholds(minimum_cases=30),
+        results=tuple(
+            CandidateMetrics(
+                model=model,
+                case_count=30,
+                recall_at_k=0.9 if model == winner else 0.8,
+                mrr=0.8 if model == winner else 0.7,
+                ndcg=0.82 if model == winner else 0.75,
+                mean_latency_ms=30,
+                coverage=1,
+                runtime_artifact_sha256=runtimes[model].runtime_artifact_sha256,
+            )
+            for model in models
+        ),
+        candidate_coordinates=tuple(
+            CandidateEvaluationCoordinate(
+                model=model,
+                index_run_id=f"run-{idx}",
+                manifest_id="manifest-1",
+                projection_seal_id=f"seal-{idx}",
+                projection_records_sha256="b" * 64,
+                artifact_set_sha256="d" * 64,
+                config_sha256="e" * 64,
+                chunk_count=30,
+                chunk_set_sha256="f" * 64,
+                runtime_registration_id=runtimes[model].runtime_registration_id,
+                runtime_artifact_sha256=runtimes[model].runtime_artifact_sha256,
+                sealed_at=stamp,
+            )
+            for idx, model in enumerate(models)
+        ),
+        evaluated_at=stamp,
+        recommended_model=winner,
+        reason="baseline empty schema audit check",
+    )
+    eval_receipt = receipt_from_evaluation(eval_artifact, evaluated_at=stamp)
+    approval = EmbeddingApprovalReceipt(
+        purpose="evidence_vector_retrieval",
+        decision="approved",
+        evaluation_artifact_sha256=eval_receipt.evaluation_artifact_sha256,
+        approved_model=winner,
+        approved_by="owner",
+        approved_at=stamp,
+        rationale="baseline empty schema audit check",
+    )
+    promotion = promotion_from_evaluation(
+        eval_artifact,
+        runtime_registration=winner_runtime,
+        approval=approval,
+        revision=1,
+    )
+    with sqlite3.connect(db_path) as write_conn:
+        register_sqlite_integrity_functions(write_conn)
+        write_conn.execute("DROP TRIGGER IF EXISTS trg_embedding_evaluation_receipt_exact")
+        for runtime in runtimes.values():
+            persist_runtime_registration(write_conn, runtime)
+        persist_evaluation_receipt(write_conn, eval_receipt)
+        persist_promotion(write_conn, promotion)
+        write_conn.commit()
 
     conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+    register_sqlite_integrity_functions(conn)
     try:
         summary = audit_connection(conn, AuditOptions())
     finally:
@@ -629,12 +750,8 @@ def test_blocks_uninitialized_coverage_and_search_for_existing_evidence(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "uninitialized-search.db"
-    root = Path(__file__).resolve().parents[1]
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0219_source_coverage_ledger")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
 
     conn = sqlite3.connect(db_path)
     stamp = datetime(2026, 7, 27)
@@ -681,12 +798,8 @@ def test_blocks_unbound_legacy_and_new_inventory_issuer_identities(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "unbound-issuer.db"
-    root = Path(__file__).resolve().parents[1]
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0227_issuer_reporting_registry")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
 
     conn = sqlite3.connect(db_path)
     stamp = datetime(2026, 7, 27)
@@ -725,12 +838,8 @@ def test_blocks_unbound_legacy_and_new_inventory_issuer_identities(
 
 def test_blocks_unresolved_identity_and_listing_conflicts(tmp_path: Path) -> None:
     db_path = tmp_path / "identity-conflict.db"
-    root = Path(__file__).resolve().parents[1]
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0227_issuer_reporting_registry")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
 
     conn = sqlite3.connect(db_path)
     stamp = datetime(2026, 7, 27)
@@ -767,12 +876,8 @@ def test_blocks_unresolved_identity_and_listing_conflicts(tmp_path: Path) -> Non
 
 def test_recomputes_source_inventory_component_digest(tmp_path: Path) -> None:
     db_path = tmp_path / "inventory-digest.db"
-    root = Path(__file__).resolve().parents[1]
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0220_source_inventory_seals")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
 
     conn = sqlite3.connect(db_path)
     stamp = datetime(2026, 7, 27)
@@ -839,26 +944,13 @@ def test_recomputes_source_inventory_component_digest(tmp_path: Path) -> None:
 
 def _search_database(tmp_path: Path) -> Path:
     db_path = tmp_path / "search-audit.db"
-    root = Path(__file__).resolve().parents[1]
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0215_observation_resolution_ledger")
-    command.upgrade(config, "0216_search_corpus_foundation")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
     return db_path
 
 
 def _semantic_search_database(tmp_path: Path) -> Path:
-    db_path = _search_database(tmp_path)
-    root = Path(__file__).resolve().parents[1]
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(config, "0231_legacy_document_evidence_bindings")
-    command.upgrade(config, "0232_document_semantic_dispositions")
-    return db_path
+    return _search_database(tmp_path)
 
 
 def _insert_evidence_document(

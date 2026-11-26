@@ -64,7 +64,7 @@ apply. Source retirement and actual canonical data deletion are separate states.
     ".github",
     ".harden"
   ],
-  "registered_exception_directories": ["outputs", "scratch"],
+  "registered_exception_directories": ["outputs"],
   "forbidden_top_level_directories": [
     "cache",
     "tmp_tests",

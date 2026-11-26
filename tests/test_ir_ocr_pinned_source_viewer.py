@@ -10,10 +10,10 @@ from pathlib import Path
 
 import fitz
 import pytest
-from comments_server_content_routes import ContentRouteContext, register_content_routes
 from flask import Flask
 from flask.testing import FlaskClient
 
+from cockpit.content_routes import ContentRouteContext, register_content_routes
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,

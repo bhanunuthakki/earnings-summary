@@ -14,7 +14,6 @@ import pytest
 from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from provenance import research_snapshot as snapshot_module
 from provenance import source_coverage as coverage_module
 from provenance.document_processing_evidence import (
@@ -264,23 +263,11 @@ def _sql_sha(value: object) -> str:
 
 
 @pytest.fixture(scope="module")
-def database_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    path = tmp_path_factory.mktemp("research-snapshot") / "template.db"
-    config = _config(path)
-    seed = sqlite3.connect(path)
-    seed.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY, source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY, source_doc_id INTEGER NOT NULL
-        );
-        """
-    )
-    seed.close()
-    command.stamp(config, BASE_REVISION)
-    command.upgrade(config, PROCESSING_EVIDENCE_REVISION)
+def database_template(
+    tmp_path_factory: pytest.TempPathFactory,
+    migrated_db: Callable[..., Path],
+) -> Path:
+    path = migrated_db(tmp_path_factory.mktemp("research-snapshot") / "template.db")
     template = sqlite3.connect(path)
     template.row_factory = sqlite3.Row
     template.execute("PRAGMA foreign_keys=ON")
@@ -702,27 +689,13 @@ def _sealed_filing_processing_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[sqlite3.Connection, str, str]:
-    real_upgrade = command.upgrade
-
-    def _bounded_fixture_upgrade(config: Config, revision: str) -> None:
-        real_upgrade(
-            config,
-            "0246_source_fact_publication_stream" if revision == "head" else revision,
-        )
-
-    monkeypatch.setattr(command, "upgrade", _bounded_fixture_upgrade)
+    del monkeypatch
     output = _filing_output((_filing_entry(0),))
     conn = _filing_database(tmp_path, output)
     conn.execute("DROP TRIGGER trg_evidence_content_blobs_append_only")
     conn.execute("UPDATE evidence_content_blobs SET media_type='application/xbrl+xml'")
     conn.commit()
-    path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
-    conn.close()
-    command.upgrade(_config(path), "0246_source_fact_publication_stream")
-    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.create_function("fact_sha256", 1, _sql_sha)
     receipt = FilingXbrlExtractionLedger(conn).publish(output)
     conn.execute(
         "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

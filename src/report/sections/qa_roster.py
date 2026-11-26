@@ -263,7 +263,7 @@ def build(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
                 stage="TRANSCRIBE(latest_quarter)",
-                fix_command="python execution/fetch_audio_transcripts.py --ticker <T>",
+                fix_command="python execution/fetch_qa_transcript.py --ticker <T> --year <YYYY> --quarter <Q>",
                 detail="No transcripts available to parse.",
             ),
         )

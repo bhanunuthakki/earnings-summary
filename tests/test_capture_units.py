@@ -124,3 +124,11 @@ def test_scrub_preserves_tickers_amounts_years() -> None:
     res = scrub.scrub(s)
     assert res.text == s
     assert res.total == 0
+
+
+def test_scrub_redacts_separated_luhn_card_without_touching_dates() -> None:
+    res = scrub.scrub("card 4111-1111-1111-1111 and 4111 1111 1111 1111 on 2026-11-25")
+    assert "4111-1111-1111-1111" not in res.text
+    assert "4111 1111 1111 1111" not in res.text
+    assert "2026-11-25" in res.text
+    assert res.redactions == {"account": 2}

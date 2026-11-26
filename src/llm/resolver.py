@@ -124,6 +124,11 @@ MODEL_CAPABILITIES: dict[str, CapabilityProfile] = {
     "gemini-3-flash-preview": CapabilityProfile(
         min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
     ),
+    # Official Dec 1, 2026 replacement for deprecated gemini-2.5-flash (verified 2026-11-25).
+    "gemini-3.5-flash-lite": CapabilityProfile(
+        min_context_length=1_048_576, requires_vision=True, requires_structured_output=True
+    ),
+    # Deprecated (auto-route effective 2026-12-01); retained for historical replay/tests only.
     "gemini-2.5-flash": CapabilityProfile(
         min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
     ),

@@ -752,53 +752,6 @@ def test_refetch_denial_precedes_work_manifest_and_accounting(
     assert not manifest_dir.exists()
 
 
-def test_audio_denial_precedes_files_network_model_and_index(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def unexpected_call(*_args: object, **_kwargs: object) -> NoReturn:
-        return pytest.fail("audio search crossed the network boundary")
-
-    def unexpected_call_2(*_args: object, **_kwargs: object) -> NoReturn:
-        return pytest.fail("Whisper boundary was crossed")
-
-    def unexpected_call_3(*_args: object, **_kwargs: object) -> NoReturn:
-        return pytest.fail("index persistence was crossed")
-
-    from execution import fetch_audio_transcripts as audio
-
-    db_path = tmp_path / "portfolio.db"
-    _stored_company(db_path)
-    audio.RAW_DIR = tmp_path / "raw"
-    audio.TMP_DIR = tmp_path / "tmp"
-    monkeypatch.setattr(
-        audio,
-        "smart_search_url",
-        unexpected_call,
-    )
-    monkeypatch.setattr(
-        audio,
-        "_transcribe",
-        unexpected_call_2,
-    )
-    monkeypatch.setattr(
-        audio.index_manager,
-        "register_transcript",
-        unexpected_call_3,
-    )
-
-    with pytest.raises(audio.AudioCollectionPolicyError):
-        audio.fetch_and_transcribe(
-            audio.FetchSpec(ticker="ACME", year=2026, quarter=2),
-            ffmpeg_location=None,
-            db_path=db_path,
-            owner_requested=True,
-            as_of=date(2026, 8, 12),
-        )
-    assert not audio.RAW_DIR.exists()
-    assert not audio.TMP_DIR.exists()
-
-
 def test_quarterly_authorizes_and_stages_before_run_accounting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2117,7 +2070,6 @@ def test_transitive_production_entrypoint_scan_closes_unreceipted_writers() -> N
         root / "execution" / "quarterly_refresh.py",
         root / "execution" / "fetch_qa_transcript.py",
         root / "execution" / "refetch_aggregator_transcripts.py",
-        root / "execution" / "fetch_audio_transcripts.py",
     )
     for path in named:
         assert "transcript_acquisition" in path.read_text(encoding="utf-8")

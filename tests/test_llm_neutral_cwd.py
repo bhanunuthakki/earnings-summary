@@ -149,3 +149,19 @@ def test_explicit_es_claude_base_url_is_honored(
     env = capture_run_calls[0].get("env")
     assert env is not None
     assert env["ANTHROPIC_BASE_URL"] == "https://gateway.example/claude"
+
+
+def test_subprocess_env_strips_unrelated_provider_api_keys(
+    capture_run_calls: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Child CLIs must not inherit unrelated FMP/Gemini/OpenRouter API keys."""
+    for key in ("FMP_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.setenv(key, "synthetic-provider-key")
+
+    cli.call_llm("prompt", purpose="bear_case", force_budget_bypass=True)
+
+    env = capture_run_calls[0].get("env")
+    assert env is not None
+    for key in ("FMP_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"):
+        assert key not in env
+    assert "PATH" in env or "Path" in env

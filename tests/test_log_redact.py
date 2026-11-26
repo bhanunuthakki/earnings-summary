@@ -248,3 +248,26 @@ def test_cloud_signed_url_credentials_masked(raw: str) -> None:
     assert "gcs-signature" not in out
     assert "aws-session" not in out
     assert "gcs-session" not in out
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "sk-ant-" + "a" * 24,
+        "sk-or-" + "b" * 24,
+        "sk_live_" + "c" * 20,
+        "rk_live_" + "d" * 20,
+        "whsec_" + "e" * 20,
+        "lin_api_" + "f" * 24,
+    ],
+)
+def test_standalone_provider_and_payment_tokens_masked(token: str) -> None:
+    out = redact(f"request failed with {token} during sync")
+    assert token not in out
+    assert "***" in out
+
+
+def test_luhn_payment_cards_masked_without_touching_non_luhn_ids() -> None:
+    out = redact("card 4111-1111-1111-1111 ref 4111-1111-1111-1112")
+    assert "4111-1111-1111-1111" not in out
+    assert "4111-1111-1111-1112" in out

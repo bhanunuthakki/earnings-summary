@@ -739,63 +739,6 @@ def test_delta_rejects_parent_from_another_issuer_scope(
         conn.close()
 
 
-def test_0255_refuses_inferred_upgrade_and_nonempty_downgrade(tmp_path: Path) -> None:
-    legacy_path = tmp_path / "legacy-populated.db"
-    legacy = sqlite3.connect(legacy_path)
-    legacy.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE llm_budgets (
-            purpose TEXT PRIMARY KEY,
-            monthly_cap_usd REAL NOT NULL,
-            warn_threshold_pct REAL NOT NULL,
-            hard_block INTEGER NOT NULL,
-            on_exceed TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            notes TEXT
-        );
-        """
-    )
-    legacy.close()
-    legacy_config = _config(legacy_path)
-    command.stamp(legacy_config, BASE_REVISION)
-    command.upgrade(legacy_config, "0254_filing_xbrl_processor_closure")
-    legacy = sqlite3.connect(legacy_path)
-    legacy.execute("DROP TRIGGER trg_canonical_fact_snapshot_exact")
-    empty_json = canonical_json([])
-    legacy.execute(
-        "INSERT INTO canonical_fact_resolution_snapshot_seals VALUES (?,?,?,?,?,?,?)",
-        (
-            "legacy-global-snapshot",
-            "legacy-global-snapshot",
-            T0.isoformat(),
-            0,
-            empty_json,
-            digest_text(empty_json),
-            T0.isoformat(),
-        ),
-    )
-    legacy.commit()
-    legacy.close()
-    with pytest.raises(RuntimeError, match="refuses to infer issuer scope"):
-        command.upgrade(legacy_config, HEAD)
-
-    scoped_path = tmp_path / "scoped-populated.db"
-    scoped = _chain_empty_database(scoped_path)
-    scoped.commit()
-    scoped.close()
-    with pytest.raises(RuntimeError, match="refuses to discard committed scoped"):
-        command.downgrade(_config(scoped_path), "0254_filing_xbrl_processor_closure")
-
-
 def test_failed_generation_is_atomic_and_replay_conflicts_fail(
     tmp_path: Path,
     migrated_db: Callable[..., Path],

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -35,27 +34,21 @@ from search.corpus_builder import (
 ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 4, 0, 0)
 A, B, C, D = "a" * 64, "b" * 64, "c" * 64, "d" * 64
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def _conn(tmp_path: Path) -> sqlite3.Connection:
     path = tmp_path / "coverage.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, "0219_source_coverage_ledger")
-    # The reconciler's indexed status is a current-runtime contract.  Projection
-    # seals were added later without changing the 0219 coverage tables, so this
-    # focused fixture fast-forwards only that additive search publication gate.
-    command.stamp(config, "0232_document_semantic_dispositions")
-    command.upgrade(config, "0233_search_projection_seals")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(path)
     conn = sqlite3.connect(path)
-    conn.execute("ALTER TABLE search_projection_seals ADD COLUMN runtime_artifact_sha256 TEXT")
+    conn.execute("DROP TABLE expected_document_obligation_bindings")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -296,7 +289,7 @@ def test_apply_replays_exact_import_without_new_coverage_revision(tmp_path: Path
         first = reconcile_source_coverage(conn, _request(apply=True))
         second = reconcile_source_coverage(conn, _request(apply=True))
 
-        assert first.records_created == 3
+        assert first.records_created == 4
         assert second.records_created == 0
         assert (
             conn.execute("SELECT coverage_status FROM v_source_coverage_current").fetchone()[0]
@@ -652,25 +645,6 @@ def test_exact_authority_identity_bridges_legacy_and_canonical_issuer_ids(
     conn = _conn(tmp_path)
     try:
         _seed_evidence(conn)
-        conn.execute(
-            "CREATE TABLE issuer_entities ("
-            "issuer_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, "
-            "entity_kind TEXT NOT NULL, created_at DATETIME NOT NULL)"
-        )
-        conn.execute(
-            "CREATE TABLE legacy_issuer_binding_revisions ("
-            "binding_revision_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, "
-            "recorded_issuer_id TEXT NOT NULL, revision INTEGER NOT NULL, "
-            "issuer_id TEXT, outcome TEXT NOT NULL, decision_kind TEXT NOT NULL, "
-            "reason_code TEXT NOT NULL, reason_details_json TEXT NOT NULL, "
-            "material_dissent BOOLEAN NOT NULL, effective_at DATETIME NOT NULL, "
-            "knowledge_at DATETIME NOT NULL, recorded_at DATETIME NOT NULL, "
-            "supersedes_binding_revision_id TEXT)"
-        )
-        conn.execute(
-            "CREATE INDEX ix_test_legacy_issuer_binding_current "
-            "ON legacy_issuer_binding_revisions (recorded_issuer_id, revision)"
-        )
         conn.execute(
             "INSERT INTO issuer_entities "
             "(issuer_id, idempotency_key, entity_kind, created_at) "

@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from provenance import fulltext_backfill as fulltext_backfill_module
 from provenance.evidence_backfill import BackfillRequest, backfill_legacy_evidence
 from provenance.evidence_ledger import (
@@ -56,7 +55,13 @@ from provenance.source_inventory_seal import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-LEGACY_BASE_REVISION = "0213_decision_draft_provider_id"
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def test_pdf_table_detector_runtime_identity_is_exact_and_closed() -> None:
@@ -177,60 +182,30 @@ def _connection(
     accession_number: str | None = None,
     coverage_schema: bool = False,
 ) -> tuple[sqlite3.Connection, Path]:
+    del coverage_schema
     db_path = tmp_path / "portfolio.db"
     repo_root = tmp_path / "repo"
     artifact = repo_root / "data" / f"ACME{suffix}"
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(content)
     digest = hashlib.sha256(content).hexdigest()
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(
-            """
-            CREATE TABLE documents (
-              id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
-              doc_type TEXT NOT NULL, period_start TIMESTAMP, period_end TIMESTAMP,
-              file_path TEXT NOT NULL, sha256 TEXT NOT NULL, fetched_at TIMESTAMP NOT NULL,
-              fetch_status TEXT NOT NULL, raw_bytes_size INTEGER NOT NULL, source_url TEXT,
-              accession_number TEXT
-            );
-            """
-        )
-        conn.execute(
-            "INSERT INTO documents VALUES (1, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, ?, ?, "
-            "'2026-07-20 12:00:00', 'ok', ?, NULL, ?)",
-            (f"data/ACME{suffix}", digest, len(content), accession_number),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    config = _config(db_path)
-    command.stamp(config, LEGACY_BASE_REVISION)
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0217_fact_selection_ledger")
-    command.upgrade(config, "0218_evidence_replica_links")
-    if coverage_schema:
-        support = sqlite3.connect(db_path)
-        try:
-            support.executescript(
-                """
-                CREATE TABLE search_corpus_manifests (
-                  manifest_id TEXT PRIMARY KEY
-                );
-                CREATE TABLE search_index_runs (
-                  index_run_id TEXT PRIMARY KEY,
-                  manifest_id TEXT NOT NULL,
-                  outcome TEXT NOT NULL
-                );
-                """
-            )
-            support.commit()
-        finally:
-            support.close()
-        command.upgrade(config, "0220_source_inventory_seals")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    from sqlite_runtime import register_sqlite_integrity_functions
+
+    register_sqlite_integrity_functions(conn)
+    conn.execute(
+        "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+        "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+        "accession_number) "
+        "VALUES (1, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, ?, ?, "
+        "'2026-07-20 12:00:00', 'ok', ?, NULL, ?)",
+        (f"data/ACME{suffix}", digest, len(content), accession_number),
+    )
+    conn.commit()
     backfill_legacy_evidence(conn, BackfillRequest(repo_root=repo_root, apply=True))
     return conn, repo_root
 
@@ -253,7 +228,10 @@ def _add_legacy_documents(
         artifact = repo_root / relative_path
         artifact.write_bytes(content)
         conn.execute(
-            "INSERT INTO documents VALUES (?, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, "
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+            "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+            "accession_number) "
+            "VALUES (?, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, "
             "?, ?, '2026-07-20 12:00:00', 'ok', ?, NULL, NULL)",
             (
                 document_id,
@@ -406,6 +384,38 @@ def _seed_archive_replica_lineage(
     archive_issuer_id = str(archive[1])
     archive_accession = str(archive[2])
     archive_observation_id = str(archive[3])
+
+    def _seed_issuer_obligation(target_issuer_id: str) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO issuer_entities VALUES (?,?,?,?)",
+            (target_issuer_id, target_issuer_id, "operating_company", recorded_at),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"periodic:{target_issuer_id}:v1",
+                f"periodic:{target_issuer_id}:v1",
+                f"periodic:{target_issuer_id}",
+                1,
+                target_issuer_id,
+                None,
+                "sec_edgar",
+                "operating_company_periodic",
+                "required",
+                "regulator_inventory",
+                recorded_at,
+                None,
+                "deterministic",
+                "test",
+                "{}",
+                recorded_at,
+                recorded_at,
+                recorded_at,
+                None,
+            ),
+        )
+
+    _seed_issuer_obligation(archive_issuer_id)
     _seed_sealed_inventory(
         conn,
         snapshot_id="snapshot:archive",
@@ -428,6 +438,8 @@ def _seed_archive_replica_lineage(
         return None
 
     replica_issuer = "issuer:wrong" if mismatch == "issuer" else archive_issuer_id
+    if replica_issuer != archive_issuer_id:
+        _seed_issuer_obligation(replica_issuer)
     replica_accession = "wrong-accession" if mismatch == "accession" else archive_accession
     replica_snapshot = (
         "snapshot:replica" if mismatch in {"issuer", "snapshot"} else "snapshot:archive"
@@ -728,7 +740,10 @@ def test_one_per_document_bounded_oversized_candidate_is_admitted(
 def test_office_scope_skips_other_formats_and_seals_checkpoint_scope(tmp_path: Path) -> None:
     conn, repo_root = _connection(tmp_path)
     conn.execute(
-        "INSERT INTO documents VALUES (2, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, "
+        "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+        "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+        "accession_number) "
+        "VALUES (2, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, "
         "'data/unbridged.txt', ?, '2026-07-20 12:00:00', 'ok', 1, NULL, NULL)",
         ("0" * 64,),
     )
@@ -2368,18 +2383,20 @@ def test_fulltext_backfill_skips_index_member_tickers_by_default(tmp_path: Path)
     conn, repo_root = _connection(tmp_path)
     try:
         conn.execute(
-            "CREATE TABLE tracked_companies ("
-            "ticker TEXT NOT NULL, list_type TEXT NOT NULL, archived_at TEXT)"
+            "INSERT OR IGNORE INTO tenants (id, created_at) VALUES ('bhanu', '2026-07-20 00:00:00')"
         )
         conn.executemany(
-            "INSERT INTO tracked_companies (ticker, list_type, archived_at) VALUES (?, ?, NULL)",
-            (("ACME", "portfolio"), ("IDX", "index_member")),
+            "INSERT INTO tracked_companies (ticker, name, list_type, archived_at) "
+            "VALUES (?, ?, ?, NULL)",
+            (("ACME", "Acme", "portfolio"), ("IDX", "Index Member", "index_member")),
         )
         idx_body = b"Index member text that must be skipped by batch backfill."
         idx_path = repo_root / "data" / "IDX.txt"
         idx_path.write_bytes(idx_body)
         conn.execute(
-            "INSERT INTO documents VALUES (2, 'IDX', 'sec_edgar', '10-Q', NULL, NULL, "
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+            "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+            "accession_number) VALUES (2, 'IDX', 'sec_edgar', '10-Q', NULL, NULL, "
             "'data/IDX.txt', ?, '2026-07-20 12:00:00', 'ok', ?, NULL, NULL)",
             (hashlib.sha256(idx_body).hexdigest(), len(idx_body)),
         )

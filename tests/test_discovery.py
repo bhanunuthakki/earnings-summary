@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 import run_discovery
-from alembic.config import Config
 
-from alembic import command
 from discovery.adjacency import (
     build_lexicon,
     mine_adjacency,
@@ -510,18 +509,9 @@ def test_discover_skip_flags(repo: Path) -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_migration_creates_table(tmp_path: Path) -> None:
-    db = tmp_path / "mig.db"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0080_viewspec_compile_budget")
-    # Pinned (not "head") so later migrations don't break this assertion.
-    command.upgrade(cfg, "0081_discovery_candidates")
+def test_migration_creates_table(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    db = migrated_db(tmp_path / "mig.db")
     conn = sqlite3.connect(db)
-    assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
-        "0081_discovery_candidates"
-    )
     conn.execute(
         "INSERT INTO discovery_candidates (ticker, evidence_json, first_seen_at,"
         " last_seen_at, updated_at) VALUES ('X', '[]', 'a', 'a', 'a')"
@@ -540,15 +530,10 @@ def test_migration_creates_table(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_migration_discovery_scoring_tables(tmp_path: Path) -> None:
-    """0095 (discovery_signals) + 0097 (discovery_sources seed) on top of the
-    live head. 0096 (score_json) no-ops without discovery_candidates, fine here."""
-    db = tmp_path / "mig2.db"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0095_signals")
-    command.upgrade(cfg, "0098_discovery_sources")
+def test_migration_discovery_scoring_tables(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "mig2.db")
     conn = sqlite3.connect(db)
     try:
         # The roster seeded from §5's two tiers: 3 screens + 3 adjacency + 33 funds.

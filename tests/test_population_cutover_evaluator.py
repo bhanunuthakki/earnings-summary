@@ -42,19 +42,344 @@ SHA = hashlib.sha256(b"population-evaluator-test").hexdigest()
 SCOPE = PopulationTemporalScope(knowledge_cutoff=STAMP, observed_through=STAMP)
 
 
+def _seed_embedding_governance(conn: sqlite3.Connection) -> tuple[str, str, str]:
+    from provenance.evidence_ledger import (
+        ContentBlob,
+        DocumentVersion,
+        EvidenceLedger,
+        EvidenceNode,
+        ExtractionRun,
+        SourceObservation,
+    )
+    from search.embedding_eval import (
+        DEFAULT_CANDIDATES,
+        CandidateEvaluationCoordinate,
+        CandidateMetrics,
+        EmbeddingRecommendationArtifact,
+        EvalThresholds,
+    )
+    from search.embedding_promotion import (
+        EmbeddingApprovalReceipt,
+        persist_evaluation_receipt,
+        persist_promotion,
+        promotion_from_evaluation,
+        receipt_from_evaluation,
+    )
+    from search.embedding_runtime_artifact import (
+        EmbeddingRuntimeArtifact,
+        RuntimeArtifactFile,
+        RuntimeComponentVersion,
+    )
+    from search.embedding_runtime_registration import (
+        persist_runtime_registration,
+        registration_from_artifact,
+    )
+    from search.grounded import (
+        CorpusDocumentMembership,
+        CorpusManifest,
+        CorpusManifestSeal,
+        EmbeddingArtifact,
+        GroundedSearchStore,
+        IndexMembership,
+        IndexRun,
+        SearchChunk,
+        membership_digest,
+    )
+
+    ts = STAMP.isoformat()
+    models = tuple(sorted(DEFAULT_CANDIDATES))
+    runtimes = {
+        model: registration_from_artifact(
+            EmbeddingRuntimeArtifact(
+                provider="fastembed",
+                model=model,
+                dimensions=768 if "base" in model else 384,
+                execution_provider="CPUExecutionProvider",
+                execution_settings=(),
+                component_versions=(
+                    RuntimeComponentVersion(component="fastembed", version="1.2.3"),
+                ),
+                files=(
+                    RuntimeArtifactFile(
+                        logical_name="model.onnx",
+                        role="model",
+                        size_bytes=3,
+                        sha256=("b" if "base" in model else "c") * 64,
+                    ),
+                ),
+            ),
+            registered_at=STAMP,
+            purpose="evidence_vector_retrieval",
+        )
+        for model in models
+    }
+    winner = models[1]
+    winner_runtime = runtimes[winner]
+    seal_ids = {models[0]: "seal-0", models[1]: "projection-1"}
+    eval_artifact = EmbeddingRecommendationArtifact(
+        purpose="evidence_vector_retrieval",
+        golden_sha256=SHA,
+        k=10,
+        thresholds=EvalThresholds(minimum_cases=30),
+        results=tuple(
+            CandidateMetrics(
+                model=model,
+                case_count=30,
+                recall_at_k=0.9 if model == winner else 0.8,
+                mrr=0.8 if model == winner else 0.7,
+                ndcg=0.82 if model == winner else 0.75,
+                mean_latency_ms=30,
+                coverage=1,
+                runtime_artifact_sha256=runtimes[model].runtime_artifact_sha256,
+            )
+            for model in models
+        ),
+        candidate_coordinates=tuple(
+            CandidateEvaluationCoordinate(
+                model=model,
+                index_run_id=f"run-{idx}",
+                manifest_id="manifest-1",
+                projection_seal_id=seal_ids[model],
+                projection_records_sha256=SHA,
+                artifact_set_sha256=SHA,
+                config_sha256=SHA,
+                chunk_count=1,
+                chunk_set_sha256=SHA,
+                runtime_registration_id=runtimes[model].runtime_registration_id,
+                runtime_artifact_sha256=runtimes[model].runtime_artifact_sha256,
+                sealed_at=STAMP,
+            )
+            for idx, model in enumerate(models)
+        ),
+        evaluated_at=STAMP,
+        recommended_model=winner,
+        reason="test promotion",
+    )
+    eval_receipt = receipt_from_evaluation(eval_artifact, evaluated_at=STAMP)
+    approval = EmbeddingApprovalReceipt(
+        purpose="evidence_vector_retrieval",
+        decision="approved",
+        evaluation_artifact_sha256=eval_receipt.evaluation_artifact_sha256,
+        approved_model=winner,
+        approved_by="test",
+        approved_at=STAMP,
+        rationale="test promotion",
+    )
+    promotion = promotion_from_evaluation(
+        eval_artifact,
+        runtime_registration=winner_runtime,
+        approval=approval,
+        revision=1,
+    )
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=SHA,
+            byte_size=4,
+            media_type="text/plain",
+            storage_uri="file:///pop",
+            recorded_at=STAMP,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id="obs-pop",
+            idempotency_key="obs-pop",
+            source_kind="sec",
+            source_url="https://sec.test/pop",
+            blob_sha256=SHA,
+            source_published_at=STAMP,
+            filing_at=STAMP,
+            accepted_at=STAMP,
+            observed_at=STAMP,
+            retrieved_at=STAMP,
+            retrieval_config_sha256=SHA,
+            collector_code_version="collector@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id="doc-pop",
+            document_key="ACME:10-Q",
+            version_sequence=1,
+            observation_id="obs-pop",
+            blob_sha256=SHA,
+            issuer_id="issuer",
+            ticker="ACME",
+            document_type="filing",
+            form_type="10-Q",
+            language="en",
+            recorded_at=STAMP,
+        )
+    )
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id="extract-pop",
+            idempotency_key="extract-pop",
+            document_version_id="doc-pop",
+            input_sha256=SHA,
+            extractor_name="parser",
+            extractor_config_sha256=SHA,
+            extractor_code_version="parser@1",
+            output_sha256=SHA,
+            started_at=STAMP,
+            completed_at=STAMP,
+            outcome="succeeded",
+        )
+    )
+    ledger.persist(
+        EvidenceNode(
+            node_id="node-pop",
+            evidence_key="ACME:node",
+            revision=1,
+            extraction_run_id="extract-pop",
+            node_kind="passage",
+            text="Revenue",
+            recorded_at=STAMP,
+        )
+    )
+    store = GroundedSearchStore(conn)
+    store.persist(
+        CorpusManifest(
+            manifest_id="manifest-1",
+            idempotency_key="manifest-1",
+            corpus_key="corpus-1",
+            revision=1,
+            selection_config_sha256=SHA,
+            selector_code_version="selector@1",
+            recorded_at=STAMP,
+        )
+    )
+    member = CorpusDocumentMembership(
+        membership_id="manifest-1:doc-pop",
+        manifest_id="manifest-1",
+        expected_document_key="ACME:10-Q",
+        document_version_id="doc-pop",
+        membership_status="included",
+        reason="eligible",
+        recorded_at=STAMP,
+    )
+    store.persist(member)
+    chunk = SearchChunk(
+        chunk_id="chunk-pop",
+        idempotency_key="chunk-pop",
+        manifest_id="manifest-1",
+        evidence_node_id="node-pop",
+        chunk_key="ACME:chunk:0",
+        chunk_revision=1,
+        text="Revenue",
+        char_start=0,
+        char_end=7,
+        chunker_config_sha256=SHA,
+        chunker_code_version="chunker@1",
+        available_at=STAMP,
+        recorded_at=STAMP,
+    )
+    store.persist(chunk)
+    store.persist(
+        CorpusManifestSeal(
+            manifest_id="manifest-1",
+            expected_document_count=1,
+            membership_digest_sha256=membership_digest([member]),
+            completion_status="complete",
+            sealed_at=STAMP,
+        )
+    )
+    for runtime in runtimes.values():
+        persist_runtime_registration(conn, runtime)
+    for idx, model in enumerate(models):
+        run_id = f"run-{idx}"
+        runtime = runtimes[model]
+        dims = 768 if "base" in model else 384
+        store.persist(
+            IndexRun(
+                index_run_id=run_id,
+                idempotency_key=run_id,
+                index_key=f"index-{idx}",
+                revision=1,
+                manifest_id="manifest-1",
+                index_kind="vector",
+                config_sha256=SHA,
+                code_version="indexer@1",
+                outcome="succeeded",
+                started_at=STAMP,
+                completed_at=STAMP,
+            )
+        )
+        store.persist(
+            IndexMembership(
+                index_run_id=run_id,
+                chunk_id="chunk-pop",
+                membership_status="included",
+                recorded_at=STAMP,
+            )
+        )
+        store.persist(
+            EmbeddingArtifact(
+                embedding_artifact_id=f"embed-pop-{idx}",
+                idempotency_key=f"embed-pop-{idx}",
+                index_run_id=run_id,
+                chunk_id="chunk-pop",
+                purpose="grounded_search",
+                provider="fastembed",
+                model=model,
+                dimensions=dims,
+                vector_sha256=SHA,
+                storage_uri=f"vector://embed-pop-{idx}",
+                input_sha256=chunk.content_sha256 or SHA,
+                request_config_sha256=SHA,
+                runtime_artifact_sha256=runtime.runtime_artifact_sha256,
+                outcome="succeeded",
+                started_at=STAMP,
+                completed_at=STAMP,
+            )
+        )
+        conn.execute(
+            "INSERT INTO search_projection_seals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                seal_ids[model],
+                seal_ids[model],
+                run_id,
+                "manifest-1",
+                "vector",
+                1,
+                SHA,
+                SHA,
+                SHA,
+                "fastembed",
+                model,
+                dims,
+                SHA,
+                f"file:///{seal_ids[model]}",
+                ts,
+                runtime.runtime_artifact_sha256,
+            ),
+        )
+    persist_evaluation_receipt(conn, eval_receipt)
+    persist_promotion(conn, promotion)
+    conn.commit()
+    return (
+        winner_runtime.runtime_registration_id,
+        eval_receipt.evaluation_receipt_id,
+        promotion.promotion_id,
+    )
+
+
+_EMBEDDING_IDS: tuple[str, str, str] | None = None
+
+
 def _database(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> sqlite3.Connection:
-    path = tmp_path / "population-evaluator.db"
-    migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        target="0256_population_cutover_receipts",
-        archived=True,
-    )
+    global _EMBEDDING_IDS
+    from sqlite_runtime import register_sqlite_integrity_functions
+
+    path = migrated_db(tmp_path / "population-evaluator.db")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
+    register_sqlite_integrity_functions(conn)
+    _EMBEDDING_IDS = _seed_embedding_governance(conn)
     return conn
 
 
@@ -67,15 +392,16 @@ def _verification(name: PopulationPlaneName, *, failed: int = 0) -> PopulationPl
     )
     details: dict[str, JsonValue] = {"plane_name": name}
     if name == "retrieval_runtime":
+        reg_id, eval_id, promo_id = _EMBEDDING_IDS or ("runtime-1", "evaluation-1", "promotion-1")
         details["governance"] = {
-            "evaluation_receipt_id": "evaluation-1",
+            "evaluation_receipt_id": eval_id,
             "evaluation_evaluated_at": STAMP.isoformat(),
-            "promotion_id": "promotion-1",
+            "promotion_id": promo_id,
             "promotion_recorded_at": STAMP.isoformat(),
             "projection_seal_ids": ["projection-1"],
             "projection_sealed_at": {"projection-1": STAMP.isoformat()},
             "runtime_registered_at": STAMP.isoformat(),
-            "runtime_registration_id": "runtime-1",
+            "runtime_registration_id": reg_id,
         }
     material = {
         "artifact_sets": [artifact.model_dump(mode="json")],

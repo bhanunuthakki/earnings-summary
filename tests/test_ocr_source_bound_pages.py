@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -15,6 +16,12 @@ from pydantic import ValidationError
 from provenance.document_processing_evidence import (
     DocumentProcessingEvidenceIntegrityError,
     read_pdf_table_artifact,
+)
+from provenance.evidence_ledger import (
+    ContentBlob,
+    DocumentVersion,
+    EvidenceLedger,
+    SourceObservation,
 )
 from provenance.ocr_extraction import (
     OCRBackfillRequest,
@@ -31,7 +38,74 @@ from runtime.deterministic import content_sha256
 from sqlite_runtime import register_sqlite_integrity_functions
 from tests import test_document_processing_evidence as table_fixtures
 from tests import test_ocr_extraction_governance as ocr_fixtures
-from tests import test_pdf_table_evidence_backfill as document_fixtures
+
+_SEED_TIME = datetime(2026, 7, 27, 12, tzinfo=UTC)
+
+
+def _seed_document(
+    db_path: Path,
+    content_root: Path,
+    document_version_id: str,
+    raw_pdf: bytes,
+) -> Path:
+    content_root.mkdir(parents=True, exist_ok=True)
+    blob_sha256 = hashlib.sha256(raw_pdf).hexdigest()
+    path = content_root / f"{blob_sha256}.pdf"
+    path.write_bytes(raw_pdf)
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=blob_sha256,
+            byte_size=len(raw_pdf),
+            media_type="application/pdf",
+            storage_uri=path.as_uri(),
+            recorded_at=_SEED_TIME,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id=f"obs:{document_version_id}",
+            idempotency_key=f"obs:{document_version_id}",
+            source_kind="issuer",
+            source_url=f"https://issuer.example/{document_version_id}.pdf",
+            blob_sha256=blob_sha256,
+            source_published_at=_SEED_TIME,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=_SEED_TIME,
+            retrieved_at=_SEED_TIME,
+            retrieval_config_sha256="a" * 64,
+            collector_code_version="fixture@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id=document_version_id,
+            document_key=f"document:{document_version_id}",
+            version_sequence=1,
+            observation_id=f"obs:{document_version_id}",
+            blob_sha256=blob_sha256,
+            issuer_id="issuer:ACME",
+            ticker="ACME",
+            document_type="investor_material",
+            form_type="exhibit",
+            accession_number=None,
+            exhibit_id=None,
+            period_start=None,
+            period_end=_SEED_TIME,
+            as_of_at=_SEED_TIME,
+            language="en",
+            replaces_document_version_id=None,
+            legacy_document_id=None,
+            recorded_at=_SEED_TIME,
+        )
+    )
+    conn.commit()
+    conn.close()
+    return path
+
 
 SelectedDocument = tuple[
     sqlite3.Connection, OCRBackfillRequest, OCRPageSelection, PdfTableExtractionArtifact
@@ -58,7 +132,7 @@ def selected_document(
     raw = document.tobytes(garbage=4, deflate=True)
     document.close()
     root = tmp_path / "repo"
-    getattr(document_fixtures, "_seed_document")(db, root / "blobs", "image-deck", raw)
+    _seed_document(db, root / "blobs", "image-deck", raw)
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
     register_sqlite_integrity_functions(conn)

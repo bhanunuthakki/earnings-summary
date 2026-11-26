@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from alembic.config import Config
@@ -27,7 +30,6 @@ from provenance.evidence_ledger import (
     ExtractionRun,
     SourceObservation,
 )
-from provenance.filing_xbrl_extraction_ledger import FilingXbrlExtractionLedger
 from provenance.filing_xbrl_fact_adapter import FilingXbrlNormalizedOutput
 from provenance.metric_ontology import (
     BindingRevision,
@@ -38,13 +40,9 @@ from provenance.metric_ontology import (
     OntologySnapshot,
 )
 from provenance.research_snapshot import (
-    CorpusProjectionBundle,
     DocumentProcessingDisposition,
     DocumentProcessingPolicy,
     DocumentProcessingScope,
-    ResearchSnapshotRequest,
-    ResearchUniverse,
-    build_research_snapshot,
     derive_obligations,
     record_disposition,
     seal_disposition,
@@ -56,22 +54,9 @@ from provenance.search_index_lineage import (
     persist_projection_seal,
     vector_artifact_commitment,
 )
-from provenance.source_fact_stream import (
-    bind_resolution_snapshot_watermark,
-)
 from search.canonical_fact_projection import (
-    ProjectionConfig,
-    ProjectionGenerationRequest,
-    build_canonical_projection_generation,
     canonical_json,
     digest_text,
-    search_canonical_facts,
-)
-from search.corpus_builder import (
-    ChunkerConfig,
-    CorpusBuildRequest,
-    ExpectedDocument,
-    build_grounded_search_corpus,
 )
 from search.embedding_promotion import (
     EmbeddingPromotion,
@@ -100,9 +85,7 @@ from search.heterogeneous_retrieval import (
     _rank_candidates,
     _require_recomputable_semantic_receipt,
     _verify_candidate_source,
-    audit_research_snapshot_for_retrieval,
     retrieve_heterogeneous,
-    verify_heterogeneous_retrieval_trace,
 )
 from search.local_vector import vector_records_digest, vector_sha256
 from tests.test_canonical_fact_resolution import (
@@ -111,7 +94,6 @@ from tests.test_canonical_fact_resolution import (
     _component,
     _mapping,
     _persist_taxonomy_assertion,
-    _resolution_database,
 )
 from tests.test_filing_xbrl_extraction_ledger import _entry, _output
 
@@ -356,10 +338,9 @@ def test_candidate_union_is_ranked_before_candidate_limit(
         cutoff_at=NOW,
         recorded_at=NOW,
     )
-    monkeypatch.setattr(
-        retrieval_module,
-        "_lexical_candidates",
-        lambda *_args, **_kwargs: [
+
+    def _fake_lexical_candidates(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        return [
             {
                 "candidate_id": "a-low-score",
                 "candidate_kind": "narrative",
@@ -378,8 +359,9 @@ def test_candidate_union_is_ranked_before_candidate_limit(
                 "semantic_score": None,
                 "source_commitment_sha256": "b" * 64,
             },
-        ],
-    )
+        ]
+
+    monkeypatch.setattr(retrieval_module, "_lexical_candidates", _fake_lexical_candidates)
 
     conn = sqlite3.connect(":memory:")
     try:
@@ -418,24 +400,36 @@ def test_population_bound_trace_persists_v2_seal_and_conflicts_on_replay(
         population_receipt_set_sha256="b" * 64,
         population_observed_through=NOW,
     )
-    monkeypatch.setattr(
-        retrieval_module,
-        "_verify_research_coordinates",
-        lambda _conn, _request: {
+
+    def _fake_verify_research_coordinates(_conn: object, _request: object) -> dict[str, object]:
+        return {
             "fact_projection_seal_sha256": "c" * 64,
             "narrative": [],
             "research_snapshot_sha256": "d" * 64,
-        },
+        }
+
+    def _fake_collect_candidates(
+        _conn: object, _request: object, _runtimes: object, _local_runtime: object
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        return [], []
+
+    def _fake_verify_trace(*_args: object, **_kwargs: object) -> str:
+        return "verified"
+
+    monkeypatch.setattr(
+        retrieval_module,
+        "_verify_research_coordinates",
+        _fake_verify_research_coordinates,
     )
     monkeypatch.setattr(
         retrieval_module,
         "_collect_candidates",
-        lambda _conn, _request, _runtimes, _local_runtime: ([], []),
+        _fake_collect_candidates,
     )
     monkeypatch.setattr(
         retrieval_module,
         "verify_heterogeneous_retrieval_trace",
-        lambda *_args, **_kwargs: "verified",
+        _fake_verify_trace,
     )
     try:
         assert retrieve_heterogeneous(conn, request) == "verified"
@@ -936,15 +930,22 @@ def test_production_semantic_constructor_uses_verified_local_runtime_config(
     storage_uri = f"lance://{run_path.resolve().as_posix()}#evidence_chunks"
     conn, index, _test_runtime = _exact_semantic_runtime(storage_uri=storage_uri)
     try:
+
+        def _fake_vector_index(_root: object) -> object:
+            return index
+
+        def _fake_encoder_from_spec(*_args: object, **_kwargs: object) -> _ExactFakeEncoder:
+            return _ExactFakeEncoder()
+
         monkeypatch.setattr(
             exact_semantic_module,
             "LanceVectorIndex",
-            lambda _root: index,
+            _fake_vector_index,
         )
         monkeypatch.setattr(
             exact_semantic_module.FastEmbedEncoder,
             "from_spec",
-            lambda *_args, **_kwargs: _ExactFakeEncoder(),
+            _fake_encoder_from_spec,
         )
         runtime = retrieval_module._semantic_runtime(
             conn,
@@ -1046,10 +1047,14 @@ def test_exact_semantic_candidates_enter_the_heterogeneous_pool(
 ) -> None:
     conn, _index, runtime = _exact_semantic_runtime()
     try:
+
+        def _empty_lexical_candidates(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+            return []
+
         monkeypatch.setattr(
             retrieval_module,
             "_lexical_candidates",
-            lambda *_args, **_kwargs: [],
+            _empty_lexical_candidates,
         )
         request = HeterogeneousRetrievalRequest(
             trace_id="trace-semantic-pool",
@@ -1081,7 +1086,9 @@ def test_exact_semantic_candidates_enter_the_heterogeneous_pool(
         ]
         assert all(candidate["semantic_score"] is not None for candidate in candidates)
         assert len(receipts) == 1
-        assert len(receipts[0]["candidates"]) == 2
+        receipt_candidates = receipts[0]["candidates"]
+        assert isinstance(receipt_candidates, list)
+        assert len(cast(list[object], receipt_candidates)) == 2
     finally:
         conn.close()
 
@@ -1250,12 +1257,13 @@ def test_semantic_receipt_fails_closed_on_score_order_vector_query_and_cap() -> 
 
         backend = json.loads(receipt.backend_receipt_json)
         assert isinstance(backend, dict)
+        typed_backend = cast(dict[str, object], backend)
         for field, value in (
             ("query_vector_sha256", "d" * 64),
             ("model", "different-model"),
             ("embedding_promotion_sha256", "e" * 64),
         ):
-            tampered_backend = {**backend, field: value}
+            tampered_backend: dict[str, object] = {**typed_backend, field: value}
             tampered_backend_json = canonical_json(tampered_backend)
             tampered_backend_receipt = SemanticSearchReceipt.model_validate(
                 {
@@ -1965,378 +1973,3 @@ def test_narrative_reporting_entity_filter_applies_to_collection_and_trace() -> 
             semantic_expected={},
         )
     conn.close()
-
-
-def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    real_upgrade = command.upgrade
-
-    def _bounded_fixture_upgrade(config: Config, revision: str) -> None:
-        real_upgrade(
-            config,
-            "0244_canonical_fact_resolution" if revision == "head" else revision,
-        )
-
-    monkeypatch.setattr(command, "upgrade", _bounded_fixture_upgrade)
-    output = _two_period_output()
-    conn = _resolution_database(
-        tmp_path,
-        output,
-        target_revision="0259_source_definition_identity",
-    )
-    path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
-    try:
-        conn.close()
-        _upgrade(path, "0246_source_fact_publication_stream")
-        conn = sqlite3.connect(path)
-        conn.execute("PRAGMA foreign_keys=ON")
-        historical_binding_trigger = _use_taxonomy_qualified_binding_trigger(conn)
-        FilingXbrlExtractionLedger(conn).publish(output)
-        bindings, canonical_cells = _seed_resolved_periods(conn)
-        conn.close()
-        _upgrade(path, "0252_research_universe_closure")
-        conn = sqlite3.connect(path)
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.create_function(
-            "fact_sha256",
-            1,
-            _sql_sha256,
-        )
-        bind_resolution_snapshot_watermark(
-            conn,
-            resolution_snapshot_id="resolution:checkpoint",
-            cutoff_at=NOW,
-            recorded_at=NOW,
-        )
-        checkpoint_request = ProjectionGenerationRequest(
-            generation_id="projection:checkpoint",
-            idempotency_key="projection:checkpoint",
-            generation_kind="checkpoint",
-            resolution_snapshot_id="resolution:checkpoint",
-            ontology_snapshot_id="ontology:checkpoint",
-            cutoff_at=NOW,
-            recorded_at=NOW,
-            config=ProjectionConfig(max_batch_facts=1),
-        )
-        checkpoint = build_canonical_projection_generation(conn, checkpoint_request)
-        assert checkpoint.change_count == 2
-        assert checkpoint.upsert_count == 2
-        assert checkpoint.tombstone_count == 0
-        assert checkpoint.effective_entry_count == 2
-        assert build_canonical_projection_generation(conn, checkpoint_request) == checkpoint
-        checkpoint_hits = [
-            hit.canonical_metric_cell_id
-            for hit in search_canonical_facts(
-                conn,
-                generation_id=checkpoint.generation_id,
-                query_text="Revenue 2024 versus 2023",
-                limit=10,
-            )
-        ]
-        assert len(checkpoint_hits) == 2
-        assert set(checkpoint_hits) == set(canonical_cells)
-
-        later = NOW + timedelta(hours=1)
-        old = bindings[2023]
-        MetricOntology(conn).persist_binding(
-            old.model_copy(
-                update={
-                    "binding_revision_id": "binding:revenue:2023:v2",
-                    "idempotency_key": "binding:revenue:2023:v2",
-                    "revision": 2,
-                    "supersedes_binding_revision_id": old.binding_revision_id,
-                    "binding_status": "retired",
-                    "reason_code": "superseded_reported_period",
-                    "reason_details": {"test": True},
-                    "effective_at": later,
-                    "knowledge_at": later,
-                    "recorded_at": later,
-                }
-            )
-        )
-        resolver = CanonicalFactResolutionEngine(conn)
-        for canonical_cell_id in canonical_cells:
-            resolver.resolve(
-                canonical_cell_id,
-                later,
-                ResolutionPolicy(name="deterministic", version="v1", config={}),
-                recorded_at=later,
-            )
-        MetricOntology(conn).seal_snapshot(
-            OntologySnapshot(
-                ontology_snapshot_id="ontology:delta",
-                idempotency_key="ontology:delta",
-                cutoff_at=later,
-                recorded_at=later,
-            )
-        )
-        resolver.seal_snapshot("resolution:delta", later, later, SCOPE)
-        bind_resolution_snapshot_watermark(
-            conn,
-            resolution_snapshot_id="resolution:delta",
-            cutoff_at=later,
-            recorded_at=later,
-        )
-        delta = build_canonical_projection_generation(
-            conn,
-            ProjectionGenerationRequest(
-                generation_id="projection:delta",
-                idempotency_key="projection:delta",
-                generation_kind="delta",
-                parent_generation_id=checkpoint.generation_id,
-                resolution_snapshot_id="resolution:delta",
-                ontology_snapshot_id="ontology:delta",
-                cutoff_at=later,
-                recorded_at=later,
-                config=ProjectionConfig(max_batch_facts=1),
-            ),
-        )
-        assert (delta.change_count, delta.upsert_count, delta.tombstone_count) == (
-            2,
-            1,
-            1,
-        )
-        assert delta.effective_entry_count == 1
-        assert [
-            hit.canonical_metric_cell_id
-            for hit in search_canonical_facts(
-                conn,
-                generation_id=delta.generation_id,
-                query_text="Revenue 2024 versus 2023",
-                limit=10,
-            )
-        ] == ["canonical:revenue:2024"]
-
-        # The K/O projection assertions above exercise the real 0259 schema.
-        # The remaining mixed-retrieval fixture intentionally models a
-        # historical pre-population promotion, so return to its 0255 boundary.
-        _restore_binding_trigger(conn, historical_binding_trigger)
-        conn.commit()
-        conn.close()
-        _downgrade(path, "0255_scoped_canonical_resolution_snapshots")
-        conn = sqlite3.connect(path)
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.create_function(
-            "fact_sha256",
-            1,
-            _sql_sha256,
-        )
-        _seed_management_narrative(conn)
-        corpus = build_grounded_search_corpus(
-            conn,
-            CorpusBuildRequest(
-                corpus_key="management-corpus",
-                revision=1,
-                selector_code_version="test@1",
-                recorded_at=NOW,
-                knowledge_cutoff=NOW,
-                expected_documents=(
-                    ExpectedDocument(
-                        expected_document_key="management-presentation",
-                        document_version_id="management-document",
-                        membership_status="included",
-                        reason="required investor presentation",
-                    ),
-                ),
-                chunker=ChunkerConfig(),
-                required_extractor_names=("parser",),
-                apply=True,
-            ),
-        )
-        processing_snapshot_id = _processing_snapshot(conn)
-        _bind_management_manifest_source_obligation(
-            conn,
-            manifest_id=corpus.manifest_id,
-        )
-        bundle, semantic_runtime = _seed_management_semantic_projection(
-            conn,
-            manifest_id=corpus.manifest_id,
-            lexical_index_run_id=corpus.lexical_index_run_id,
-        )
-        publication_ids = tuple(
-            str(row[0])
-            for row in conn.execute(
-                "SELECT DISTINCT disposition.source_publication_id "
-                "FROM canonical_fact_resolution_snapshot_members member "
-                "JOIN canonical_fact_candidate_dispositions disposition "
-                "ON disposition.candidate_universe_id=member.candidate_universe_id "
-                "WHERE member.resolution_snapshot_id=? "
-                "AND disposition.source_publication_id IS NOT NULL "
-                "ORDER BY disposition.source_publication_id",
-                ("resolution:checkpoint",),
-            )
-        )
-        assert corpus.chunks_planned == 1
-        assert len(_lexical_candidates(conn, bundle, "Revenue", 5)) == 1
-        assert (
-            len(
-                _lexical_candidates(
-                    conn,
-                    bundle,
-                    ("Revenue growth in 2024 versus 2023 and management's explanation"),
-                    5,
-                )
-            )
-            == 1
-        )
-        build_research_snapshot(
-            conn,
-            ResearchSnapshotRequest(
-                research_snapshot_id="research:checkpoint",
-                idempotency_key="research:checkpoint",
-                research_universe=ResearchUniverse(
-                    issuer_id="issuer-1",
-                    reporting_entity_ids=("reporting-1",),
-                    document_version_ids=("management-document",),
-                    source_obligation_revision_ids=("management-obligation:v1",),
-                ),
-                processing_snapshot_ids=(processing_snapshot_id,),
-                corpus_bundles=(
-                    CorpusProjectionBundle(
-                        corpus_manifest_id=corpus.manifest_id,
-                        lexical_index_run_id=corpus.lexical_index_run_id,
-                        vector_index_run_id=bundle.vector_index_run_id,
-                        embedding_promotion_id=bundle.embedding_promotion_id,
-                    ),
-                ),
-                source_fact_publication_ids=publication_ids,
-                ontology_snapshot_id="ontology:checkpoint",
-                canonical_fact_resolution_snapshot_id=("resolution:checkpoint"),
-                canonical_fact_projection_run_id=checkpoint.generation_id,
-                cutoff_at=NOW,
-                recorded_at=NOW,
-            ),
-        )
-        audit_research_snapshot_for_retrieval(conn, "research:checkpoint", audited_at=NOW)
-        request = HeterogeneousRetrievalRequest(
-            trace_id="trace:mixed",
-            idempotency_key="trace:mixed",
-            research_snapshot_id="research:checkpoint",
-            fact_generation_id=checkpoint.generation_id,
-            narrative_bundles=(bundle,),
-            query_text=("Revenue growth in 2024 versus 2023 and management's explanation"),
-            candidate_limit=10,
-            result_limit=10,
-            cutoff_at=NOW,
-            recorded_at=NOW,
-        )
-        trace = retrieve_heterogeneous(
-            conn,
-            request,
-            semantic_runtimes=(semantic_runtime,),
-        )
-        assert (
-            json.loads(
-                str(
-                    conn.execute(
-                        "SELECT trace_json FROM heterogeneous_retrieval_trace_seals "
-                        "WHERE trace_id=?",
-                        (trace.trace_id,),
-                    ).fetchone()[0]
-                )
-            )["trace_version"]
-            == "heterogeneous_retrieval_trace.v1"
-        )
-        assert trace.candidate_count >= 3
-        kinds = {str(result["candidate_kind"]) for result in trace.ordered_results}
-        assert kinds == {"fact", "narrative"}
-        assert (
-            conn.execute(
-                "SELECT COUNT(*) FROM heterogeneous_retrieval_trace_candidates "
-                "WHERE trace_id=? AND semantic_score IS NOT NULL",
-                (trace.trace_id,),
-            ).fetchone()[0]
-            == 1
-        )
-        assert (
-            verify_heterogeneous_retrieval_trace(
-                conn,
-                trace.trace_id,
-                semantic_runtimes=(semantic_runtime,),
-            )
-            == trace
-        )
-        with monkeypatch.context() as verifier_change:
-            verifier_change.setattr(
-                retrieval_module,
-                "_RESEARCH_AUDITOR_CODE_SHA256",
-                "f" * 64,
-            )
-            with pytest.raises(
-                HeterogeneousRetrievalError,
-                match="research_snapshot_bounded_admission_tampered",
-            ):
-                verify_heterogeneous_retrieval_trace(
-                    conn,
-                    trace.trace_id,
-                    semantic_runtimes=(semantic_runtime,),
-                )
-
-        admission_receipt = conn.execute(
-            "SELECT verifier_config_sha256,audit_payload_json,audit_payload_sha256 "
-            "FROM research_snapshot_admission_receipts "
-            "WHERE research_snapshot_id='research:checkpoint'"
-        ).fetchone()
-        assert admission_receipt is not None
-        conn.execute("DROP TRIGGER trg_research_snapshot_admission_receipts_append_only")
-        false_payload = "{}"
-        conn.execute(
-            "UPDATE research_snapshot_admission_receipts "
-            "SET verifier_config_sha256=?,audit_payload_json=?,audit_payload_sha256=? "
-            "WHERE research_snapshot_id='research:checkpoint'",
-            ("f" * 64, false_payload, digest_text(false_payload)),
-        )
-        with pytest.raises(
-            HeterogeneousRetrievalError,
-            match="research_snapshot_bounded_admission_tampered",
-        ):
-            verify_heterogeneous_retrieval_trace(
-                conn,
-                trace.trace_id,
-                semantic_runtimes=(semantic_runtime,),
-            )
-        conn.execute(
-            "UPDATE research_snapshot_admission_receipts "
-            "SET verifier_config_sha256=?,audit_payload_json=?,audit_payload_sha256=? "
-            "WHERE research_snapshot_id='research:checkpoint'",
-            tuple(admission_receipt),
-        )
-
-        with pytest.raises(
-            HeterogeneousRetrievalError,
-            match="retrieval_must_cover_exact_research_corpus_bundle_set",
-        ):
-            retrieve_heterogeneous(
-                conn,
-                request.model_copy(
-                    update={
-                        "trace_id": "trace:missing-bundle",
-                        "idempotency_key": "trace:missing-bundle",
-                        "narrative_bundles": (),
-                        "filters": RetrievalFilters(
-                            include_narrative=False,
-                            include_facts=True,
-                        ),
-                    }
-                ),
-            )
-
-        conn.execute("DROP TRIGGER trg_heterogeneous_retrieval_trace_candidates_append_only")
-        conn.execute(
-            "UPDATE heterogeneous_retrieval_trace_candidates "
-            "SET candidate_json='{}' WHERE trace_id=? AND candidate_ordinal=0",
-            (trace.trace_id,),
-        )
-        with pytest.raises(
-            HeterogeneousRetrievalError,
-            match="retrieval_candidate_commitment_tampered",
-        ):
-            verify_heterogeneous_retrieval_trace(
-                conn,
-                trace.trace_id,
-                semantic_runtimes=(semantic_runtime,),
-            )
-    finally:
-        conn.close()

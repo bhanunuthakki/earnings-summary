@@ -18,9 +18,6 @@ Output:
   transcripts/raw/<TICKER>_Q<N>_<YEAR>.txt — synthesizer-banner header + raw
   Q&A text. Registered with source=aggregator_<name>; QA validator routes to
   the synthesized-flavor checks.
-
-Use as the PRIMARY pull path; `fetch_audio_transcripts.py` becomes the audio
-fallback for quarters not yet indexed by any aggregator.
 """
 
 from __future__ import annotations

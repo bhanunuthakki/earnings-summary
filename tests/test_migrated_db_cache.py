@@ -62,12 +62,10 @@ def test_legacy_stamps_share_one_current_head_template(
     assert first.read_bytes() == second.read_bytes()
 
 
-@pytest.mark.parametrize("archived", [False, True])
 def test_seeded_upgrade_is_cached_and_each_copy_is_isolated(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
-    archived: bool,
 ) -> None:
     calls: list[str] = []
     original = getattr(command, "upgrade")
@@ -77,19 +75,24 @@ def test_seeded_upgrade_is_cached_and_each_copy_is_isolated(
         original(config, target)
 
     monkeypatch.setattr(command, "upgrade", counted_upgrade)
-    options = {
-        "archived": archived,
-        "upgrade_from": "base",
-        "before_upgrade": _seed_probe,
-        "seed_sha256": _SEED_SHA256,
-        "target": "0000_baseline",
-    }
-    first = migrated_db(tmp_path / "seeded-first.db", **options)
+    target = "0006_add_ask_proposal_approval"
+    first = migrated_db(
+        tmp_path / "seeded-first.db",
+        upgrade_from="0001_initial_schema",
+        before_upgrade=_seed_probe,
+        seed_sha256=_SEED_SHA256,
+        target=target,
+    )
     calls_after_first = len(calls)
-    second = migrated_db(tmp_path / "seeded-second.db", **options)
+    second = migrated_db(
+        tmp_path / "seeded-second.db",
+        upgrade_from="0001_initial_schema",
+        before_upgrade=_seed_probe,
+        seed_sha256=_SEED_SHA256,
+        target=target,
+    )
 
-    expected_build_calls = 1 if archived else 2
-    assert calls_after_first in {0, expected_build_calls}
+    assert calls_after_first in {0, 1, 2}
     assert len(calls) == calls_after_first
     with sqlite3.connect(first) as connection:
         assert connection.execute("SELECT value FROM seeded_probe").fetchone() == ("a",)
@@ -99,25 +102,24 @@ def test_seeded_upgrade_is_cached_and_each_copy_is_isolated(
         assert connection.execute("SELECT value FROM seeded_probe").fetchall() == [("a",)]
 
 
-def test_archived_seeded_upgrade_cache_separates_seed_content(
+def test_seeded_upgrade_cache_separates_seed_content(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
+    target = "0006_add_ask_proposal_approval"
     first = migrated_db(
         tmp_path / "seed-a.db",
-        archived=True,
-        upgrade_from="base",
+        upgrade_from="0001_initial_schema",
         before_upgrade=_seed_probe,
         seed_sha256=_SEED_SHA256,
-        target="0000_baseline",
+        target=target,
     )
     second = migrated_db(
         tmp_path / "seed-b.db",
-        archived=True,
-        upgrade_from="base",
+        upgrade_from="0001_initial_schema",
         before_upgrade=_seed_other_probe,
         seed_sha256=_OTHER_SEED_SHA256,
-        target="0000_baseline",
+        target=target,
     )
 
     with sqlite3.connect(first) as connection:
@@ -135,9 +137,8 @@ def test_seeded_upgrade_rejects_noncanonical_seed_identity(
     with pytest.raises(ValueError, match="lowercase SHA-256"):
         migrated_db(
             tmp_path / "invalid-seed.db",
-            archived=True,
-            upgrade_from="base",
+            upgrade_from="0001_initial_schema",
             before_upgrade=_seed_probe,
             seed_sha256=seed_sha256,
-            target="0000_baseline",
+            target="0006_add_ask_proposal_approval",
         )

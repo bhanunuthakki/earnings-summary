@@ -13,14 +13,14 @@ from unittest.mock import Mock
 
 import comments_server
 import pytest
-from comments_server_panel_cache import (
+
+import runtime.portfolio_tracker as portfolio_tracker_runtime
+from cockpit.panel_cache import (
     PanelCacheEntry,
     PanelCacheHit,
     PanelCacheReservation,
     PanelResponseCache,
 )
-
-import runtime.portfolio_tracker as portfolio_tracker_runtime
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch
 from operations.attention import (
@@ -338,9 +338,7 @@ def test_operations_registry_comes_from_code_root_not_minimal_runtime_root(
 
 
 def test_operations_review_bundle_loads_kpi_repair_from_state_root() -> None:
-    source = (PROJECT_ROOT / "execution" / "comments_server_ops_routes.py").read_text(
-        encoding="utf-8"
-    )
+    source = (PROJECT_ROOT / "src" / "cockpit" / "ops_routes.py").read_text(encoding="utf-8")
     route = source.split("def operations_review_bundle_api():", maxsplit=1)[1].split(
         '@app.route("/api/operations/kpi-semantic-review/<ticker>"', maxsplit=1
     )[0]

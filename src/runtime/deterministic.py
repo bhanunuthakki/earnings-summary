@@ -9,15 +9,13 @@ redefined privately across the tree (``_canonical_json`` x44,
 each copy a chance for a separator or ``ensure_ascii`` difference to change a
 digest and silently break dedup, supersession, or reconstruction.
 
-Variant discipline (load-bearing, see ``docs/quality/canonical-helpers.json``):
+Variant discipline:
 where legacy copies genuinely differed in byte semantics the difference is a
 *distinct named function* here — ``ensure_ascii=True`` vs ``False``,
 ``allow_nan=False``, ``default=str``, separator-joined digests, naive-vs-aware
 coercion — and every migrated call site maps to its exact variant. Never merge
 two variants under one name; never add a keyword-only escape hatch that lets a
-caller silently pick the wrong byte semantics. The equivalence test
-(``tests/test_canonical_helpers_equivalence.py``) proves each migrated site's
-old private implementation byte-identical against its mapped function.
+caller silently pick the wrong byte semantics.
 
 Scope note: the *clock* stamps (``now_naive_utc``/``now_iso``/
 ``to_naive_utc``/``now_iso_space_seconds``) stay in ``src/clock.py``, the

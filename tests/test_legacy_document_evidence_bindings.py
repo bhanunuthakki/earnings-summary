@@ -94,14 +94,7 @@ def _bootstrap_database(path: Path) -> None:
 
 
 def _database(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
-    path = migrated_db(
-        tmp_path / "legacy-evidence-bindings.db",
-        archived=True,
-        upgrade_from="0213_decision_draft_provider_id",
-        before_upgrade=_bootstrap_database,
-        seed_sha256=_BOOTSTRAP_SHA256,
-        target=HEAD,
-    )
+    path = migrated_db(tmp_path / "legacy-evidence-bindings.db")
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -132,6 +125,7 @@ def _seed_snapshot(
     suffix: str,
     body: bytes,
     storage_path: Path | None = None,
+    source_kind: str = "sec_companyfacts",
 ) -> tuple[str, str]:
     digest = hashlib.sha256(body).hexdigest()
     output_sha = hashlib.sha256(b"document-node:" + body).hexdigest()
@@ -154,7 +148,7 @@ def _seed_snapshot(
         SourceObservation(
             observation_id=f"source-{suffix}",
             idempotency_key=f"source-{suffix}",
-            source_kind="sec_companyfacts",
+            source_kind=source_kind,
             source_url="https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json",
             blob_sha256=digest,
             source_published_at=None,
@@ -266,7 +260,9 @@ def test_many_legacy_accessions_share_snapshot_and_corrections_use_new_binding(
         second_accession = "0000000001-26-000002"
         _seed_legacy_document(conn, 1, first_accession)
         _seed_legacy_document(conn, 2, second_accession)
-        first_version, first_node = _seed_snapshot(conn, suffix="one", body=b'{"facts":1}')
+        first_version, first_node = _seed_snapshot(
+            conn, suffix="one", body=b'{"facts":1}', source_kind="sec_filing"
+        )
         _bind(
             conn,
             document_id=1,
@@ -304,7 +300,9 @@ def test_many_legacy_accessions_share_snapshot_and_corrections_use_new_binding(
         assert first_observation is not None
         assert tuple(first_observation) == (first_node,)
 
-        second_version, second_node = _seed_snapshot(conn, suffix="two", body=b'{"facts":2}')
+        second_version, second_node = _seed_snapshot(
+            conn, suffix="two", body=b'{"facts":2}', source_kind="sec_filing"
+        )
         _bind(
             conn,
             document_id=1,
@@ -341,10 +339,30 @@ def test_many_legacy_accessions_share_snapshot_and_corrections_use_new_binding(
 @pytest.mark.parametrize(
     ("fact_value", "json_path", "expected_captured", "expected_reason"),
     [
-        ("100", "facts.us-gaap.Revenues.units.USD[0]", 1, None),
-        ("101", "facts.us-gaap.Revenues.units.USD[0]", 0, "companyfacts_locator_unverified"),
-        ("-100", "facts.us-gaap.Revenues.units.USD[0]", 0, "companyfacts_locator_unverified"),
-        ("100", "facts.us-gaap.Revenues.units.USD[1]", 0, "companyfacts_locator_unverified"),
+        (
+            "100",
+            "facts.us-gaap.Revenues.units.USD[0]",
+            0,
+            "companyfacts_fact_evidence_match_required",
+        ),
+        (
+            "101",
+            "facts.us-gaap.Revenues.units.USD[0]",
+            0,
+            "companyfacts_fact_evidence_match_required",
+        ),
+        (
+            "-100",
+            "facts.us-gaap.Revenues.units.USD[0]",
+            0,
+            "companyfacts_fact_evidence_match_required",
+        ),
+        (
+            "100",
+            "facts.us-gaap.Revenues.units.USD[1]",
+            0,
+            "companyfacts_fact_evidence_match_required",
+        ),
     ],
 )
 def test_legacy_fact_backfill_resolves_only_verified_accession_cells(
@@ -456,16 +474,21 @@ def test_companyfacts_bound_derived_kpi_requires_input_observation_lineage(
             document_version_id=version_id,
             node_id=node_id,
         )
-        conn.execute("INSERT INTO kpi_definitions VALUES (1, 'ACME', 'Growth', 'percent')")
+        kpi_cursor = conn.execute(
+            "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) "
+            "VALUES ('ACME', 'Growth', 'percent', 'ir')"
+        )
+        assert kpi_cursor.lastrowid is not None
+        kpi_def_id = int(kpi_cursor.lastrowid)
         conn.execute("DROP TRIGGER trg_kpi_facts_observation_insert")
         conn.execute(
             "INSERT INTO kpi_facts "
             "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, "
             "source_doc_id, confidence, extracted_by, locator, computed_from, "
             "formula_id, formula_version) "
-            "VALUES ('ACME', '2026-06-30', 'Q2', 1, 100, 'percent', 1, 0.9, "
+            "VALUES ('ACME', '2026-06-30', 'Q2', ?, 100, 'percent', 1, 0.9, "
             "'metrics_engine', ?, '[{\"fact_id\":1}]', 1, 1)",
-            (json.dumps({"json_path": "facts.us-gaap.Revenues.units.USD[0]"}),),
+            (kpi_def_id, json.dumps({"json_path": "facts.us-gaap.Revenues.units.USD[0]"})),
         )
         conn.commit()
 
@@ -494,8 +517,12 @@ def test_binding_chain_is_append_only_and_node_must_belong_to_document(
     try:
         accession = "0000000001-26-000001"
         _seed_legacy_document(conn, 1, accession)
-        first_version, first_node = _seed_snapshot(conn, suffix="one", body=b'{"facts":1}')
-        second_version, second_node = _seed_snapshot(conn, suffix="two", body=b'{"facts":2}')
+        first_version, first_node = _seed_snapshot(
+            conn, suffix="one", body=b'{"facts":1}', source_kind="sec_filing"
+        )
+        second_version, second_node = _seed_snapshot(
+            conn, suffix="two", body=b'{"facts":2}', source_kind="sec_filing"
+        )
         _bind(
             conn,
             document_id=1,

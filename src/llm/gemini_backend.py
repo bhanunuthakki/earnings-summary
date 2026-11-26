@@ -112,11 +112,13 @@ def gemini_http_error_type() -> type[Exception]:
 # below if the API 404s it — preview aliases rotate without notice).
 GEMINI_BACKEND_DEFAULT_MODEL = "gemini-3.1-pro-preview"
 GEMINI_BACKEND_FAST_MODEL = "gemini-3-flash-preview"
-# Stable GA fallback for the fast tier. If GEMINI_BACKEND_FAST_MODEL (a preview
-# alias) returns NotFound, call_gemini self-anneals: it writes this id into
-# _effective_fast_model and retries — all subsequent in-process calls then use
-# the fallback automatically without operator intervention.
-_GEMINI_FAST_MODEL_FALLBACK = "gemini-2.5-flash"
+# Stable GA fallback for the fast tier (replaces deprecated gemini-2.5-flash,
+# which auto-routes to gemini-3.5-flash-lite on 2026-12-01). If
+# GEMINI_BACKEND_FAST_MODEL (a preview alias) returns NotFound, call_gemini
+# self-anneals: it writes this id into _effective_fast_model and retries — all
+# subsequent in-process calls then use the fallback automatically without
+# operator intervention.
+_GEMINI_FAST_MODEL_FALLBACK = "gemini-3.5-flash-lite"
 
 # Explicit per-purpose Gemini model pins. Ships EMPTY: the default tier
 # derivation (Claude fast-classifier purposes → Flash, everything else → Pro)
