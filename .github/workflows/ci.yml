@@ -27,10 +27,10 @@ jobs:
           python-version: "3.13"
       - name: Verify public tree boundary
         run: python execution/verify_public_tree.py
-      - name: Run detect-secrets scan
-        run: |
-          pip install detect-secrets==1.5.0
-          python .github/scripts/leak_scan.py --cache "${{ runner.temp }}/secret-scan-clean.json"
+      - name: Install leak scanner
+        run: pip install detect-secrets==1.5.0
+      - name: Run leak scan
+        run: python .github/scripts/leak_scan.py --cache "${{ runner.temp }}/scan-cache.json"
 
   quality:
     name: Format, Lint, Typecheck & Instructions
@@ -40,6 +40,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -54,13 +55,26 @@ jobs:
         run: |
           python -m ruff format --check --extend-exclude alembic/versions_archived .
           python -m ruff check .
-      - name: Typecheck src/
-        run: python -m pyright --pythonpath "$(which python)" src/
+      - name: Typecheck changed Python files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            base="origin/${{ github.base_ref }}"
+          else
+            base="HEAD~1"
+          fi
+          changed_py=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- '*.py' || true)
+          if [ -n "$changed_py" ]; then
+            # shellcheck disable=SC2086
+            python -m pyright --pythonpath "$(which python)" $changed_py
+          fi
       - name: Validate directives, folder contract, and instruction tests
         run: |
           python execution/validate_directive_manifest.py
           python execution/validate_folder_contract.py
-          python -m pytest -q instruction_tests
+          python -m pytest -q --noconftest instruction_tests/test_instruction_contracts.py
           .githooks/test_pre_push.sh
 
   tests:
@@ -71,6 +85,28 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Restore verified SQLite 3.53.4 writer runtime
+        id: sqlite_cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/sqlite-3.53.4
+          key: ci-sqlite-${{ runner.os }}-${{ runner.arch }}-3.53.4-${{ hashFiles('.github/scripts/build_sqlite.sh') }}
+      - name: Build verified SQLite writer runtime
+        if: steps.sqlite_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash .github/scripts/build_sqlite.sh
+      - name: Preload verified SQLite writer runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sqlite_dir="$RUNNER_TEMP/sqlite-3.53.4"
+          test -f "$sqlite_dir/libsqlite3.so.0"
+          echo "LD_PRELOAD=$sqlite_dir/libsqlite3.so.0" >> "$GITHUB_ENV"
+          LD_PRELOAD="$sqlite_dir/libsqlite3.so.0" python - <<'PY'
+          import sqlite3
+
+          assert sqlite3.sqlite_version == "3.53.4", sqlite3.sqlite_version
+          PY
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"

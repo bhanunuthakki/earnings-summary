@@ -222,9 +222,12 @@ def install_middleware(app: Flask, ctx: ServerContext) -> None:
                     or cors_allow_origin(referer_origin, repo_root=repo_root) is None
                 ):
                     return ({"error": "cross-site state-changing request refused"}, 403)
-            elif fetch_site != "same-origin" and not capability_matches:
-                if is_browser_user_agent(request.headers.get("User-Agent", "")):
-                    return ({"error": "state-changing request capability required"}, 403)
+            elif (
+                fetch_site != "same-origin"
+                and not capability_matches
+                and is_browser_user_agent(request.headers.get("User-Agent", ""))
+            ):
+                return ({"error": "state-changing request capability required"}, 403)
         return None
 
     @app.before_request

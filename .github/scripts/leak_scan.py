@@ -25,7 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import cast
 
-SCHEMA = "secret-scan-clean-blobs/v2"
+SCHEMA = "secret-scan-clean-blobs/v3"
+FILTER_FILE = Path(".github/scripts/quality_hash_filter.py")
 # Canonical evidence hash fields are generated metadata. Keep scanning every
 # other field and file with the unchanged detector set.
 EXCLUDE_FILES = (
@@ -37,6 +38,8 @@ EXCLUDE_FILES = (
     r"|test_validate_environment)\.py)$"
 )
 HOOK_ARGUMENTS = (
+    "--filter",
+    f"file://{FILTER_FILE.as_posix()}::is_quality_evidence_hash",
     "--exclude-files",
     EXCLUDE_FILES,
 )
@@ -63,13 +66,13 @@ def entry_key(path: str, blob: str) -> str:
 
 
 def cache_salt(root: Path, detector_version: str) -> str:
-    del root
     digest = hashlib.sha256()
     for part in (
         SCHEMA,
         detector_version,
         json.dumps(HOOK_ARGUMENTS),
         Path(__file__).read_bytes().hex(),
+        (root / FILTER_FILE).read_bytes().hex(),
     ):
         digest.update(part.encode())
         digest.update(b"\0")

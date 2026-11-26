@@ -1237,9 +1237,11 @@ def record_disposition(
                 disposition.knowledge_at,
                 disposition.recorded_at,
             )
-    elif disposition.terminal_status == "not_applicable":
-        if obligation["applicability"] != "not_applicable":
-            raise ValueError("not_applicable requires a non-applicable obligation")
+    elif (
+        disposition.terminal_status == "not_applicable"
+        and obligation["applicability"] != "not_applicable"
+    ):
+        raise ValueError("not_applicable requires a non-applicable obligation")
     reason_json = canonical_json(disposition.reason_details)
     commitment = {
         "evidence": [reference.model_dump(mode="json") for reference in disposition.evidence],
