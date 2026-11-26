@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from db_paths import require_db_path
 from log_redact import redact
 from models.runs import StageStatus
+from pipeline.operational_health import db_size_health
 from pipeline.run_accounting import (
     PipelineRunSuppressedError,
     end_run,
@@ -451,6 +452,7 @@ def _run_backup() -> int:
             tmp_gz = Path(staging) / "portfolio.db.gz"
             with _timed("snapshot"):
                 consistent_snapshot(SRC_DB, tmp_path)
+            snapshot_size_bytes = tmp_path.stat().st_size
             # Hash during compression (one read instead of two) while the check runs
             # beside it. Nothing is encrypted or published unless the check passes.
             # On an unchanged day the gzip is discarded.
@@ -483,10 +485,42 @@ def _run_backup() -> int:
             with _timed("verify"):
                 _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
         record_snapshot(
-            final_path, family="portfolio-db", source=SRC_DB, snapshot_sha256=snapshot_sha256
+            final_path,
+            family="portfolio-db",
+            source=SRC_DB,
+            snapshot_sha256=snapshot_sha256,
+            source_size_bytes=snapshot_size_bytes,
         )
         size_mb = final_path.stat().st_size / 1e6
-        print(f"OK backup -> {final_path}  ({size_mb:.1f} MB encrypted)  retained=pending-upload")
+        raw_mb = snapshot_size_bytes / 1e6
+        print(
+            f"OK backup -> {final_path}  ({size_mb:.1f} MB encrypted, {raw_mb:.1f} MB raw)  "
+            "retained=pending-upload"
+        )
+        try:
+            size_health = db_size_health(SRC_DB, directory=dest_dir)
+            if size_health.severity != "ok":
+                delta_part = (
+                    f" delta={size_health.growth_bytes / (1024 * 1024):+.1f} MiB"
+                    if size_health.growth_bytes is not None
+                    else ""
+                )
+                pct_part = (
+                    f" ({size_health.growth_pct:+.1f}%)"
+                    if size_health.growth_pct is not None
+                    else ""
+                )
+                print(
+                    f"WARN: database size tripwire ({size_health.severity}): "
+                    f"size={size_health.size_bytes / (1024**3):.2f} GiB"
+                    f"{delta_part}{pct_part}",
+                    file=sys.stderr,
+                )
+        except (OSError, ValueError) as exc:
+            print(
+                f"WARN: database size health check unavailable: {redact(exc)}",
+                file=sys.stderr,
+            )
         _backup_archive_sidecar(dest_dir)
     except Exception as exc:
         _finish_accounting(accounting, success=False, error_msg=redact(exc))
@@ -517,6 +551,7 @@ def _backup_archive_sidecar(dest_dir: Path) -> None:
         tmp_gz = Path(staging) / f"{ARCHIVE_PREFIX}.gz"
         with _timed("archive_snapshot"):
             consistent_snapshot(archive, tmp_path)
+        archive_snapshot_size_bytes = tmp_path.stat().st_size
         integrity_ok, snapshot_sha256 = _check_and_compress(tmp_path, tmp_gz, "archive_")
         if not integrity_ok:
             raise RuntimeError(f"archive snapshot failed SQLite {SNAPSHOT_CHECK}")
@@ -530,7 +565,11 @@ def _backup_archive_sidecar(dest_dir: Path) -> None:
         with _timed("archive_verify"):
             _verify_encrypted_snapshot(final_path, Path(staging), snapshot_sha256)
     record_snapshot(
-        final_path, family="portfolio-gc-archive", source=archive, snapshot_sha256=snapshot_sha256
+        final_path,
+        family="portfolio-gc-archive",
+        source=archive,
+        snapshot_sha256=snapshot_sha256,
+        source_size_bytes=archive_snapshot_size_bytes,
     )
     size_mb = final_path.stat().st_size / 1e6
     print(f"OK archive backup -> {final_path.name}  ({size_mb:.1f} MB encrypted)")

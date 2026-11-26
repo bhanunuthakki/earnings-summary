@@ -29,6 +29,7 @@ class BackupReceipt(BaseModel):
     snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     ciphertext_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size_bytes: int = Field(gt=0)
+    source_size_bytes: int | None = Field(default=None, gt=0)
     verified_at_utc: str = Field(min_length=1)
     uploaded_at_utc: str | None = None
     recovery_pin: bool = False
@@ -74,7 +75,14 @@ def write_receipt(path: Path, receipt: BackupReceipt) -> None:
         staged.unlink(missing_ok=True)
 
 
-def record_snapshot(path: Path, *, family: str, source: Path, snapshot_sha256: str) -> None:
+def record_snapshot(
+    path: Path,
+    *,
+    family: str,
+    source: Path,
+    snapshot_sha256: str,
+    source_size_bytes: int | None = None,
+) -> None:
     if not safe_file(path) or path.resolve() == source.resolve():
         raise ValueError("unsafe backup snapshot path")
     write_receipt(
@@ -86,6 +94,7 @@ def record_snapshot(path: Path, *, family: str, source: Path, snapshot_sha256: s
             snapshot_sha256=snapshot_sha256,
             ciphertext_sha256=file_sha256(path),
             size_bytes=path.stat().st_size,
+            source_size_bytes=source_size_bytes,
             verified_at_utc=datetime.now(UTC).isoformat(),
         ),
     )

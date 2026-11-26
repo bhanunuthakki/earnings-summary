@@ -32,6 +32,7 @@ from pathlib import Path
 
 from pipeline.operational_health import (
     archive_backup_covers_local_sidecar,
+    db_size_health,
     latest_backup,
     latest_eval,
     wal_size,
@@ -181,6 +182,52 @@ def operational_alarms(db_path: Path, *, now: datetime | None = None) -> str:
             )
     except (OSError, ValueError) as exc:
         log.warning({"event": "cron_health_wal_probe_failed", "error": str(exc)})
+
+    try:
+        size = db_size_health(db_path, now=observed_now)
+        gib = 1024 * 1024 * 1024
+        mib = 1024 * 1024
+        if size.size_exceeded == "critical":
+            alarms.append(
+                '<div class="k-well k-well-bad ch-alarm">'
+                "<strong>SQLite database size is critical</strong>"
+                f"Current database size is {size.size_bytes / gib:.2f} GiB; "
+                f"the critical threshold is {size.crit_bytes / gib:.2f} GiB. "
+                "Inspect table bloat and recent ingestion volume before backups time out."
+                "</div>"
+            )
+        elif size.size_exceeded == "warn":
+            alarms.append(
+                '<div class="k-well k-well-warn ch-alarm">'
+                "<strong>SQLite database size is elevated</strong>"
+                f"Current database size is {size.size_bytes / gib:.2f} GiB; "
+                f"the warning threshold is {size.warn_bytes / gib:.2f} GiB. "
+                "Monitor growth and run db_gc if temporary or redundant rows accumulated."
+                "</div>"
+            )
+        if (
+            size.growth_exceeded
+            and size.baseline_bytes is not None
+            and size.growth_bytes is not None
+        ):
+            pct_text = f" ({size.growth_pct:+.1f}%)" if size.growth_pct is not None else ""
+            baseline_time = (
+                size.baseline_observed_at.strftime("%Y-%m-%d %H:%M UTC")
+                if size.baseline_observed_at is not None
+                else "prior backup"
+            )
+            alarms.append(
+                '<div class="k-well k-well-warn ch-alarm">'
+                "<strong>SQLite database grew sharply</strong>"
+                f"Database grew by {size.growth_bytes / mib:.1f} MiB{escape(pct_text)} "
+                f"(from {size.baseline_bytes / gib:.2f} GiB at {escape(baseline_time)} "
+                f"to {size.size_bytes / gib:.2f} GiB); "
+                f"alert thresholds are {size.growth_warn_bytes / mib:.0f} MiB "
+                f"or {size.growth_warn_pct:.0f}%."
+                "</div>"
+            )
+    except (OSError, ValueError) as exc:
+        log.warning({"event": "cron_health_db_size_probe_failed", "error": str(exc)})
 
     try:
         evaluation = latest_eval(db_path)
