@@ -138,6 +138,7 @@ def _request(conn: sqlite3.Connection, root: Path) -> ReviewedSecFinancialReques
             repo_root=root,
             source_lane="evidence_native",
             document_version_id="event-doc",
+            include_table_cells=True,
             apply=True,
         ),
     )

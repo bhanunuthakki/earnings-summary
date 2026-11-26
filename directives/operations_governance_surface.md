@@ -19,6 +19,25 @@ Optional opt-in flags prune `index_member`-only coverage chains, inactive or
 after `PRAGMA foreign_key_check` and `PRAGMA integrity_check`. No dashboard
 route, scheduler task, or production service changes.
 
+## Database size and growth tripwire — November 26, 2026
+
+Disposition: **existing diagnostics surface extended; no new panel, route, schedule, operator action, or database schema**.
+`pipeline.operational_health.db_size_health` adds a read-only filesystem probe beside `wal_size` and
+`latest_backup`. It checks `portfolio.db` size against configurable warning (default 5 GiB) and
+critical (default 10 GiB) thresholds and compares current size against a bounded scan (at most 32
+newest, at most 16 KiB each) of validated `portfolio-db` backup receipts carrying optional
+`source_size_bytes`. Growth alerts trigger on a jump of at least 500 MiB or at least 20% (for
+baselines at or above `min(growth_warn_bytes, 64 MiB)`) within the 48-hour lookback window, falling
+back to the newest historical receipt when backups are stale.
+
+`pipeline.cron_health_panel.operational_alarms` renders these read-only warnings using the existing
+`.k-well` alarm banners without opening SQLite, reading ciphertext, or adding local CSS.
+`runtime.backup_retention.BackupReceipt` adds an optional backward-compatible `source_size_bytes`
+field populated by `cron/backup_db.py`, which also logs a stderr warning when the tripwire fires.
+Missing, corrupt, symlinked, or legacy receipts without `source_size_bytes` never crash rendering
+and never mask absolute size alarms. Evidence: `tests/test_cron_health_panel.py`,
+`tests/test_backup_retention.py`, `tests/test_operations_style_master.py`.
+
 ## KPI semantic-review scheduler retirement — November 24, 2026
 
 Disposition: **surface retired**. The owner retired the `\earnings-summary\prepare_kpi_semantic_review`

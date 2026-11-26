@@ -39,6 +39,7 @@ from provenance.fulltext_extractor_identity import (
     OFFICE_FULLTEXT_EXTRACTOR,
     PDF_FULLTEXT_EXTRACTOR,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
+    STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR,
     FulltextExtractorIdentity,
     resolve_fulltext_extractor_identity,
     select_approved_fulltext_run,
@@ -1511,7 +1512,10 @@ def _canonical_non_pdf_nodes(
 
 
 def _uses_canonical_hierarchy_policy(extractor_code_version: str) -> bool:
-    return extractor_code_version == STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR.code_version
+    return extractor_code_version in {
+        STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR.code_version,
+        STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR.code_version,
+    }
 
 
 def _is_raw_structure_tag(text: str) -> bool:
