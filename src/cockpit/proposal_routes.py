@@ -9,10 +9,10 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from comments_server_route_support import ActivationCounter, RedactedFailureLogger
 from flask import Flask, request
 from pydantic import ValidationError
 
+from cockpit.route_support import ActivationCounter, RedactedFailureLogger
 from research.proposal_approval import (
     AskProposalDecisionV1,
     ProposalConflictError,

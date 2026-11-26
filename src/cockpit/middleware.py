@@ -13,24 +13,24 @@ import time
 import urllib.parse
 from typing import TYPE_CHECKING, cast
 
-from comments_server_cockpit_memo import CockpitDataReservation
-from comments_server_panel_cache import (
+from flask import Flask, Response, g, request
+
+import comments
+from cockpit.cockpit_memo import CockpitDataReservation
+from cockpit.panel_cache import (
     PanelCacheBusy,
     PanelCacheEntry,
     PanelCacheHit,
     PanelCacheReservation,
     resolve_mutation_families,
 )
-from comments_server_shared import (
+from cockpit.shared import (
     COCKPIT_DATA_MEMO_FAMILIES,
     CORRELATION_ID_RX,
     cors_allow_origin,
     is_browser_user_agent,
     is_work_os_cached_route,
 )
-from flask import Flask, Response, g, request
-
-import comments
 from log_redact import redact
 from logging_config import get_correlation_id, new_correlation_id, set_correlation_id
 from runtime.secrets import secret_read_path
@@ -43,7 +43,7 @@ from server_runtime.access import (
 )
 
 if TYPE_CHECKING:
-    from comments_server_context import ServerContext
+    from cockpit.context import ServerContext
 
 
 def install_middleware(app: Flask, ctx: ServerContext) -> None:

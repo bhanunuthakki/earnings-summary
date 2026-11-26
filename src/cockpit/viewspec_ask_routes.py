@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import cast
 
-from comments_server_context import ServerContext
 from flask import Flask, Response, request
 
 from ask.context import build_portfolio_pack
@@ -28,6 +27,7 @@ from ask.store import (
     load_turns,
     rename_session,
 )
+from cockpit.context import ServerContext
 from logging_config import get_correlation_id
 from research.proposal_approval import bind_ask_proposal_events
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite

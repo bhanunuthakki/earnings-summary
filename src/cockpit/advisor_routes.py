@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import cast
 
-from comments_server_context import ServerContext
 from flask import Flask, Response, request, stream_with_context
 
 import ticker_validation
+from cockpit.context import ServerContext
 from dispatch_registry import RegistryConflict
 from logging_config import get_correlation_id
 from runtime.python_process import managed_python_argv

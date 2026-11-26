@@ -5,17 +5,17 @@ from __future__ import annotations
 import sqlite3
 from typing import cast
 
-from comments_server_context import ServerContext
-from comments_server_shared import (
+from flask import Flask, Response, abort, request
+from pydantic import ValidationError
+
+from cockpit.context import ServerContext
+from cockpit.shared import (
     DISCOVERY_OWNER_STATUSES,
     candidate_to_json,
     payload_text,
     record_dismiss_pass,
     view_to_json,
 )
-from flask import Flask, Response, abort, request
-from pydantic import ValidationError
-
 from discovery.store import BUILDABLE_STATUSES
 from dispatch_registry import RegistryConflict
 from identity import DEFAULT_USER_ID

@@ -8,10 +8,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from comments_server_content_routes import ContentRouteContext, register_content_routes
 from flask import Flask
 from flask.testing import FlaskClient
 
+from cockpit.content_routes import ContentRouteContext, register_content_routes
 from pipeline.peeks import render_canonical_financial_peek
 from provenance.fact_plane_v2 import CanonicalJSONObject
 from report.sections import financials

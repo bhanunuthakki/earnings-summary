@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import date
 from typing import cast
 
-from comments_server_context import ServerContext
 from flask import Flask, Response, request
 from process_report_comments import (
     preview_thesis_edits,
@@ -15,6 +14,7 @@ from process_report_comments import (
 
 import comments
 import ticker_validation
+from cockpit.context import ServerContext
 from dispatch_registry import RegistryConflict
 from llm.cli import LLMBudgetExceeded, is_hard_stop
 from logging_config import get_correlation_id

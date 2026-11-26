@@ -6,15 +6,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 import comments_server
-import comments_server_proposal_routes as proposal_routes
 import pytest
-from comments_server_proposal_routes import (
-    ResearchProposalRouteContext,
-    register_research_proposal_routes,
-)
 from flask import Flask
 from flask.testing import FlaskClient
 
+import cockpit.proposal_routes as proposal_routes
+from cockpit.proposal_routes import (
+    ResearchProposalRouteContext,
+    register_research_proposal_routes,
+)
 from research.proposal_approval import AskProposalDecisionV1
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"

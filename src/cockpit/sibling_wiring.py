@@ -2,34 +2,34 @@
 
 from __future__ import annotations
 
-from comments_server_alert_routes import AppContext, register_alert_routes
-from comments_server_attention_routes import AttentionRouteContext, register_attention_routes
-from comments_server_content_routes import ContentRouteContext, register_content_routes
-from comments_server_context import ServerContext
-from comments_server_dcf_routes import DcfRouteContext, register_dcf_routes
-from comments_server_decision_draft_routes import register_decision_draft_routes
-from comments_server_governed_alert_routes import (
+from flask import Flask
+
+import ticker_validation
+from cockpit.alert_routes import AppContext, register_alert_routes
+from cockpit.attention_routes import AttentionRouteContext, register_attention_routes
+from cockpit.content_routes import ContentRouteContext, register_content_routes
+from cockpit.context import ServerContext
+from cockpit.dcf_routes import DcfRouteContext, register_dcf_routes
+from cockpit.decision_draft_routes import register_decision_draft_routes
+from cockpit.governed_alert_routes import (
     GovernedAlertRouteContext,
     register_governed_alert_routes,
 )
-from comments_server_ir_approval_routes import IrApprovalRouteContext, register_ir_approval_routes
-from comments_server_journal_routes import JournalRouteContext, register_journal_routes
-from comments_server_profile_routes import ProfileRouteContext, register_profile_routes
-from comments_server_proposal_routes import (
+from cockpit.ir_approval_routes import IrApprovalRouteContext, register_ir_approval_routes
+from cockpit.journal_routes import JournalRouteContext, register_journal_routes
+from cockpit.profile_routes import ProfileRouteContext, register_profile_routes
+from cockpit.proposal_routes import (
     ResearchProposalRouteContext,
     register_research_proposal_routes,
 )
-from comments_server_settings_routes import SettingsRouteContext, register_settings_routes
-from comments_server_shared import (
+from cockpit.settings_routes import SettingsRouteContext, register_settings_routes
+from cockpit.shared import (
     dcf_recompute_payload,
     linked_gsheet,
     note_to_json,
     opt_int,
     referer_back_path,
 )
-from flask import Flask
-
-import ticker_validation
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import fetch_live_portfolio, probe_tracker
 

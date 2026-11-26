@@ -48,8 +48,7 @@ except ImportError:  # pragma: no cover - install hint
     )
     sys.exit(1)
 
-from comments_server_tracker_routes import register_tracker_read_routes
-
+from cockpit.tracker_routes import register_tracker_read_routes
 from db_paths import require_db_path
 from dcf.input_evidence import SourceReadContext
 from dispatch_registry import Registry
@@ -66,25 +65,25 @@ from server_runtime.access import (
 if TYPE_CHECKING:
     pass
 
-from comments_server_actions_routes import register_actions_routes
-from comments_server_advisor_routes import register_advisor_routes
-from comments_server_chat_routes import register_chat_routes
-from comments_server_comments_routes import register_comments_routes
-from comments_server_context import build_server_context
-from comments_server_core_routes import register_core_routes
-from comments_server_ops_routes import register_ops_routes
-from comments_server_panel_metrics_routes import register_panel_metrics_routes
-from comments_server_panel_routes import register_panel_routes
-from comments_server_shared import (
+from cockpit.actions_routes import register_actions_routes
+from cockpit.advisor_routes import register_advisor_routes
+from cockpit.chat_routes import register_chat_routes
+from cockpit.comments_routes import register_comments_routes
+from cockpit.context import build_server_context
+from cockpit.core_routes import register_core_routes
+from cockpit.ops_routes import register_ops_routes
+from cockpit.panel_metrics_routes import register_panel_metrics_routes
+from cockpit.panel_routes import register_panel_routes
+from cockpit.shared import (
     LOGGER,
     PROJECT_ROOT,
     RedactingFlask,
     drain_durable_events,
 )
-from comments_server_sibling_wiring import register_sibling_routes
-from comments_server_views_discovery_routes import register_views_discovery_routes
-from comments_server_viewspec_ask_routes import register_viewspec_ask_routes
-from comments_server_work_os_routes import register_work_os_routes
+from cockpit.sibling_wiring import register_sibling_routes
+from cockpit.views_discovery_routes import register_views_discovery_routes
+from cockpit.viewspec_ask_routes import register_viewspec_ask_routes
+from cockpit.work_os_routes import register_work_os_routes
 
 # The disconnect-safe drain was historically importable from this module.
 _drain_durable_events = drain_durable_events

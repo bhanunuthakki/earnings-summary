@@ -7,13 +7,13 @@ from pathlib import Path
 
 import comments_server
 import pytest
-from comments_server_profile_routes import (
-    ProfileRouteContext,
-    register_profile_routes,
-)
 from flask import Flask
 from flask.testing import FlaskClient
 
+from cockpit.profile_routes import (
+    ProfileRouteContext,
+    register_profile_routes,
+)
 from synthesis.tenets import record_tenet, supersede_tenet
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"

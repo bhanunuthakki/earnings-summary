@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from comments_server_context import ServerContext
 from flask import Response
+
+from cockpit.context import ServerContext
 
 # A panel builder returns the rendered fragment (or its documented error tuple).
 PanelBuilder = Callable[[ServerContext], "Response | tuple[str, int]"]

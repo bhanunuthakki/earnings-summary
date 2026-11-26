@@ -7,15 +7,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from comments_server_context import ServerContext
-from comments_server_shared import (
-    MAINTENANCE_ACTIONS,
-    opt_int,
-)
 from flask import Flask, request
 from refresh_dispatch import resolve_steps
 
 import ticker_validation
+from cockpit.context import ServerContext
+from cockpit.shared import (
+    MAINTENANCE_ACTIONS,
+    opt_int,
+)
 from dispatch_registry import RegistryConflict
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_v1 import TrackerV1Client

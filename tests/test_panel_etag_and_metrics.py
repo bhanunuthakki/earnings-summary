@@ -29,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import comments_server
-from comments_server_panel_cache import (
+
+from cockpit.panel_cache import (
     CLEAR_ALL,
     MUTATION_ROUTE_CACHE_REGISTRY,
 )

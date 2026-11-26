@@ -8,8 +8,9 @@ from pathlib import Path
 
 import comments_server
 import pytest
-from comments_server_panel_registry import PANEL_BUILDERS
 from flask.testing import FlaskClient
+
+from cockpit.panel_registry import PANEL_BUILDERS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

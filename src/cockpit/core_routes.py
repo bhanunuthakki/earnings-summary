@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import cast
 
-from comments_server_context import ServerContext
 from flask import Flask, Response, redirect, request, send_file
 
+from cockpit.context import ServerContext
 from identity import DEFAULT_USER_ID
 from pipeline.dashboard_status import build_dashboard_rows
 from pipeline.work_os_shell import render_work_os_shell_result

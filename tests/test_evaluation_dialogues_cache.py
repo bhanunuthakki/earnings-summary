@@ -39,8 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import comments_server
-from comments_server_panel_cache import resolve_mutation_families
 
+from cockpit.panel_cache import resolve_mutation_families
 from pipeline import evaluation_dialogues
 
 DIALOGUES_PATH = "/api/work-os/evaluation-dialogues"

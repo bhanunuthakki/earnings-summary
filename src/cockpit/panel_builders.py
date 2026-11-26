@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from comments_server_context import ServerContext
-from comments_server_panel_registry import PANEL_BUILDERS, register_panel
 from flask import Response, abort, request
 
 import ticker_validation
+from cockpit.context import ServerContext
+from cockpit.panel_registry import PANEL_BUILDERS, register_panel
 from identity import DEFAULT_USER_ID
 from operations.attention_projection import build_attention_panel_view
 from operations.paths import scheduler_receipt_path, service_receipt_path

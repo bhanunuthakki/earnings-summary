@@ -7,8 +7,9 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import cast
 
-from comments_server_context import ServerContext
 from flask import Flask, request
+
+from cockpit.context import ServerContext
 
 
 def register_panel_metrics_routes(app: Flask, ctx: ServerContext) -> None:

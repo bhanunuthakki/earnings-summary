@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from comments_server_context import ServerContext
-from comments_server_panel_builders import PANEL_BUILDERS
 from flask import Flask, Response, abort, request
 
+from cockpit.context import ServerContext
+from cockpit.panel_builders import PANEL_BUILDERS
 from pipeline.analytical_dashboard import build_analytical_dashboard
 from pipeline.ticker_command_center import (
     render_holding_fragment,

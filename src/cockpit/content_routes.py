@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlencode
 
-from comments_server_evaluation_projection import resolve_work_os_evaluation_item
 from flask import (
     Flask,
     Response,
@@ -29,6 +28,7 @@ from flask import (
     send_file,
 )
 
+from cockpit.evaluation_projection import resolve_work_os_evaluation_item
 from integrations.portfolio_tracker_client import LivePortfolio
 from pipeline.work_os_briefs import (
     build_brief_descriptor,
@@ -65,7 +65,7 @@ from research.decision_brief import publish_report_candidate
 # Self-hosted webfonts vendored under src/ui/vendor/fonts/, beside the inlined
 # Alpine asset. The Work OS shell's @font-face rules reference these exact
 # files, so first paint never depends on an external font origin.
-_VENDOR_FONTS_DIR = Path(__file__).resolve().parents[1] / "src" / "ui" / "vendor" / "fonts"
+_VENDOR_FONTS_DIR = Path(__file__).resolve().parents[2] / "src" / "ui" / "vendor" / "fonts"
 
 
 @dataclass(frozen=True)
@@ -387,7 +387,7 @@ def _register_report_sync_routes(app: Flask, context: ContentRouteContext) -> No
 
 
 def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
-    from comments_server_financial_evidence_routes import register_growth_evidence_routes
+    from cockpit.financial_evidence_routes import register_growth_evidence_routes
 
     register_growth_evidence_routes(
         app,

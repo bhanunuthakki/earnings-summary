@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from comments_server_context import ServerContext
 from flask import Flask
+
+from cockpit.context import ServerContext
 
 
 def register_chat_routes(app: Flask, ctx: ServerContext) -> None:

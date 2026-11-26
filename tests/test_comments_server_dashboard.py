@@ -676,9 +676,8 @@ def test_work_os_portfolio_api_caches_its_degraded_tracker_payload(
 def test_single_ticker_evaluation_projection_matches_the_full_build(app_repo: Path) -> None:
     """The peek/label-review single-item projection is the Evaluation surface's
     own item for the same ticker (same resolver, smaller input)."""
-    from comments_server_evaluation_projection import resolve_work_os_evaluation_item
-
     import ticker_validation
+    from cockpit.evaluation_projection import resolve_work_os_evaluation_item
     from pipeline.research_cockpit import build_cockpit_rows
     from pipeline.work_os_evaluation import build_work_os_evaluation
 
@@ -1136,9 +1135,8 @@ def test_vendored_font_route_serves_immutable_binaries(client: Any) -> None:
 def test_portfolio_skips_fundamentals_without_poisoning_full_cockpit(
     app_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from comments_server_cockpit_memo import CockpitDataMemo, CockpitDataReservation
-
     import pipeline.research_cockpit as cockpit
+    from cockpit.cockpit_memo import CockpitDataMemo, CockpitDataReservation
     from pipeline.work_os_earnings import EarningsReadoutProjection, EarningsReadoutSummary
 
     calls: list[str] = []

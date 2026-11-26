@@ -36,13 +36,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import comments_server
-from comments_server_panel_cache import (
+
+from cockpit.panel_cache import (
     PanelCacheBusy,
     PanelCacheHit,
     PanelCacheReservation,
     PanelResponseCache,
 )
-
 from tests.comments_server_seams import patch_server_seam
 
 OVERVIEW_PATH = "/api/panel/overview"

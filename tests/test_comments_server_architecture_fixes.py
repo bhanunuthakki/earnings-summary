@@ -8,13 +8,13 @@ from pathlib import Path
 
 import comments_server
 import pytest
-from comments_server_panel_cache import (
+
+from cockpit.panel_cache import (
     PanelCacheEntry,
     PanelCacheHit,
     PanelCacheReservation,
     PanelResponseCache,
 )
-
 from tests.comments_server_seams import patch_server_seam
 
 

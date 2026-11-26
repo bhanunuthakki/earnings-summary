@@ -8,11 +8,11 @@ import time
 from datetime import UTC, datetime
 from typing import cast
 
-from comments_server_context import ServerContext
-from comments_server_evaluation_projection import resolve_work_os_evaluation_item
 from flask import Flask, g, request
 
 import ticker_validation
+from cockpit.context import ServerContext
+from cockpit.evaluation_projection import resolve_work_os_evaluation_item
 from integrations.portfolio_allocation import fetch_portfolio_allocation
 from integrations.portfolio_offline_snapshot import read_configured_offline_portfolio_snapshot
 from integrations.portfolio_tracker_client import fetch_live_portfolio

@@ -20,29 +20,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from comments_server_cockpit_memo import (
-    CockpitDataBusy,
-    CockpitDataHit,
-    CockpitDataMemo,
-    CockpitDataReservation,
-    cockpit_data_memo_key,
-)
-from comments_server_middleware import install_middleware
-from comments_server_panel_cache import PanelResponseCache
-from comments_server_route_support import (
-    ActivationCounter,
-    BackgroundTaskStarter,
-    RedactedFailureLogger,
-)
-from comments_server_shared import (
-    MAX_ADMITTED_CHATS,
-    MAX_REQUEST_BYTES,
-    MAX_USER_INPUT_CHARS,
-    PROJECT_ROOT,
-    STREAM_QUEUE_MAXSIZE,
-    canonical_session_context,
-    drain_durable_events,
-)
 from flask import Flask, Response, g, request, stream_with_context
 
 from ask.engine import AskTurn, sanitize_history
@@ -59,6 +36,29 @@ from ask.exchange_store import (
 )
 from ask.store import AskSession as _AskSession
 from ask.store import ensure_session, get_session, rename_session
+from cockpit.cockpit_memo import (
+    CockpitDataBusy,
+    CockpitDataHit,
+    CockpitDataMemo,
+    CockpitDataReservation,
+    cockpit_data_memo_key,
+)
+from cockpit.middleware import install_middleware
+from cockpit.panel_cache import PanelResponseCache
+from cockpit.route_support import (
+    ActivationCounter,
+    BackgroundTaskStarter,
+    RedactedFailureLogger,
+)
+from cockpit.shared import (
+    MAX_ADMITTED_CHATS,
+    MAX_REQUEST_BYTES,
+    MAX_USER_INPUT_CHARS,
+    PROJECT_ROOT,
+    STREAM_QUEUE_MAXSIZE,
+    canonical_session_context,
+    drain_durable_events,
+)
 from dashboard.inbox import collect_inbox, render_inbox_stream, schema_drift_notice
 from dashboard.upcoming import render_upcoming_strip
 from dcf.input_evidence import SourceReadContext

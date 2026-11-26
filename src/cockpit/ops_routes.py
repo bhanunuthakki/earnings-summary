@@ -8,10 +8,10 @@ import urllib.parse
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
-from comments_server_context import ServerContext
 from flask import Flask, Response, request
 from pydantic import ValidationError
 
+from cockpit.context import ServerContext
 from identity import DEFAULT_USER_ID
 from operations.host_runtime import build_host_bundle
 from operations.kpi_semantic_review_export import (

@@ -38,8 +38,8 @@ if TYPE_CHECKING:
     from user_state.saved_views import SavedViewRow
 
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = PROJECT_ROOT / "execution"
 SRC_DIR = PROJECT_ROOT / "src"
 
 # Repo-wide maintenance chores exposed on the dashboard, each dispatched as a
