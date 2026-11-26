@@ -59,9 +59,6 @@ CORE_SCHEDULED_DATA_PATHS = (
 # schema preflight the empty scratch DB cannot satisfy. Broad directory-level
 # debt allowlists are prohibited.
 INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
-    # Recovery audit opens only a restored temporary candidate through a
-    # read-only URI; applying portfolio writer policy would mutate the evidence.
-    "execution/audit_deleted_table_recovery.py": 1,
     # Runtime benchmark intentionally measures raw in-memory SQLite against the
     # managed bootstrap, so centralizing these probes would erase the control.
     "execution/benchmark_sqlite_runtime.py": 2,
@@ -79,6 +76,8 @@ INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
     # Coverage reconciliation is a read-only observation CLI over an explicit
     # URI; routing it through the writer runtime would change its contract.
     "execution/reconcile_issuer_document_coverage.py": 1,
+    # Promoted from scratch/: opens explicit --db read-only before registry seeding.
+    "execution/seed_kpi_registry.py": 3,
 }
 SQLITE_RUNTIME_CALLS = 2
 
