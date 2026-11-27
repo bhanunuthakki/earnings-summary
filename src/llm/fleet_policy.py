@@ -5,9 +5,11 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+from collections.abc import Callable, Iterable
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
+from typing import cast
 
 AGENT_INSTRUCTIONS_HOME_ENV_VAR = "AGENT_INSTRUCTIONS_HOME"
 PRIMARY_BACKEND_ENV_VAR = "LLM_PRIMARY_SUBSCRIPTION_BACKEND"
@@ -81,7 +83,11 @@ def preferred_provider_order() -> tuple[str, ...]:
         module = _policy_module()
     except RuntimeError:
         return _DEFAULT_PREFERRED_PROVIDERS
-    return tuple(str(p) for p in module.preferred_provider_order())
+    raw_getter = getattr(module, "preferred_provider_order", None)
+    if not callable(raw_getter):
+        return _DEFAULT_PREFERRED_PROVIDERS
+    getter = cast("Callable[[], Iterable[object]]", raw_getter)
+    return tuple(str(p) for p in getter())
 
 
 def subscription_fallback_disabled() -> bool:
@@ -90,7 +96,11 @@ def subscription_fallback_disabled() -> bool:
         module = _policy_module()
     except RuntimeError:
         return os.environ.get(FALLBACK_DISABLED_ENV_VAR, "").strip().lower() in _TRUE_VALUES
-    return bool(module.is_subscription_fallback_disabled())
+    raw_getter = getattr(module, "is_subscription_fallback_disabled", None)
+    if not callable(raw_getter):
+        return os.environ.get(FALLBACK_DISABLED_ENV_VAR, "").strip().lower() in _TRUE_VALUES
+    getter = cast("Callable[[], object]", raw_getter)
+    return bool(getter())
 
 
 def policy_environment_names() -> tuple[str, str]:

@@ -45,3 +45,22 @@ def test_missing_policy_requires_an_explicit_primary(
 
     with pytest.raises(RuntimeError, match=fleet_policy.PRIMARY_BACKEND_ENV_VAR):
         fleet_policy.subscription_route()
+
+
+def test_legacy_policy_module_without_new_helpers_falls_back_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    legacy_module = SimpleNamespace(
+        subscription_route=lambda: (SimpleNamespace(value="claude"),),
+    )
+    monkeypatch.setattr(fleet_policy, "_policy_module", lambda: legacy_module)
+    monkeypatch.delenv(fleet_policy.FALLBACK_DISABLED_ENV_VAR, raising=False)
+
+    assert fleet_policy.subscription_route() == ("claude",)
+    assert fleet_policy.preferred_provider_order() == ("gemini", "claude")
+    assert fleet_policy.subscription_fallback_disabled() is False
+
+    monkeypatch.setenv(fleet_policy.FALLBACK_DISABLED_ENV_VAR, "true")
+    assert fleet_policy.subscription_fallback_disabled() is True
