@@ -727,6 +727,352 @@ def test_google_finance_beta_receipt_index_ingest_scan_binding_and_coverage_audi
         assert evidence["verification_reason_codes"] == []
 
 
+def test_content_addressed_suffix_upgrade_supersedes_readonly_roic_and_maps_non_dec_fye(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+) -> None:
+    import index_manager
+    from execution import audit_quarterly_data_coverage as coverage_audit
+    from execution import ingest_transcripts as ingest
+    from pipeline.commitment_scan_receipts import current_transcript_scan_binding
+    from pipeline.source_policy import ReportedPeriodStatus, ReportedPeriodWindow
+    from pipeline.transcript_acquisition import (
+        COMBINED_SOURCE_REGIME_IDENTITY,
+        authorize_transcript_request,
+        persist_authorized_transcript_artifact,
+        stage_authorized_payload,
+    )
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+    from transcripts.acquisition_semantics import (
+        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        ExistingArtifactBehavior,
+    )
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    (repo_root / ".tmp").mkdir(parents=True)
+    raw_dir = repo_root / "transcripts" / "raw"
+    processed_dir = repo_root / "transcripts" / "processed"
+    raw_dir.mkdir(parents=True)
+    processed_dir.mkdir(parents=True)
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('BN','Brookfield','portfolio','12-31','equity'),"
+            "('BIRK','Birkenstock','portfolio','09-30','equity')"
+        )
+        conn.commit()
+
+    from pipeline import transcript_acquisition as acquisition
+
+    def _window(
+        _conn: sqlite3.Connection, *, ticker: str, as_of: date, max_quarters: int = 8
+    ) -> ReportedPeriodWindow:
+        del as_of, max_quarters
+        if ticker.upper() == "BIRK":
+            return ReportedPeriodWindow(
+                status=ReportedPeriodStatus.COMPLETE,
+                period_ends=(date(2026, 6, 30), date(2026, 3, 31)),
+                snapshot_ids=("sec-birk",),
+                fiscal_year_end="09-30",
+                proof_sha256="b" * 64,
+                reason="fixture_birk",
+            )
+        return ReportedPeriodWindow(
+            status=ReportedPeriodStatus.COMPLETE,
+            period_ends=(date(2026, 9, 30), date(2026, 6, 30)),
+            snapshot_ids=("sec-bn",),
+            fiscal_year_end="12-31",
+            proof_sha256="a" * 64,
+            reason="fixture_bn",
+        )
+
+    monkeypatch.setattr(acquisition, "reported_period_window_from_inventory", _window)
+    monkeypatch.setattr(index_manager, "PROJECT_ROOT", str(repo_root))
+    monkeypatch.setattr(index_manager, "CACHE_DIR", str(repo_root / ".tmp"))
+    monkeypatch.setattr(
+        index_manager,
+        "TRANSCRIPT_INDEX_PATH",
+        str(repo_root / ".tmp" / "transcript_index.json"),
+    )
+    monkeypatch.setattr(
+        index_manager,
+        "DOCUMENT_INDEX_PATH",
+        str(repo_root / ".tmp" / "document_index.json"),
+    )
+    monkeypatch.setattr(index_manager, "TRANSCRIPTS_RAW_DIR", str(raw_dir))
+    monkeypatch.setattr(index_manager, "TRANSCRIPTS_PROCESSED_DIR", str(processed_dir))
+
+    # 1) Pre-existing lower-tier ROIC no-QA transcript occupying BN_Q3_2026.txt
+    old_roic_text = (
+        "=== SYNTHESIZED QUARTERLY UPDATE — Q&A SEGMENT ONLY ===\n"
+        "Ticker:    BN\n"
+        "Period:    Q3 2026\n"
+        "Source:    aggregator_roic (https://www.roic.ai/quote/BN/transcripts/2026-year/3-quarter)\n\n"
+        "Bruce Flatt\nPrepared remarks only without Q&A. " + ("Filler remarks. " * 160) + "\n"
+    )
+    old_roic_bytes = old_roic_text.encode("utf-8")
+    (raw_dir / "BN_Q3_2026.txt").write_bytes(old_roic_bytes)
+    (processed_dir / "BN_Q3_2026.txt").write_bytes(old_roic_bytes)
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        roic_req = TranscriptAcquisitionRequest(
+            schema_version="transcript-acquisition-request@2",
+            entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+            canonical_ticker="BN",
+            fiscal_year=2026,
+            fiscal_quarter=3,
+            as_of=date(2026, 11, 20),
+            source_type=SourceType.IR_DOC,
+            document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+            provider=TranscriptProvider.ROIC,
+            owner_requested=True,
+            existing_artifact=False,
+            existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+            source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+            source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+        )
+        roic_auth = authorize_transcript_request(conn, roic_req)
+        roic_artifact = stage_authorized_payload(
+            roic_auth,
+            payload=old_roic_bytes,
+            private_root=staging_root,
+            source_url="https://www.roic.ai/quote/BN/transcripts/2026-year/3-quarter",
+            canonical_document_path=Path("transcripts/raw/BN_Q3_2026.txt"),
+        )
+        roic_receipt_id = persist_authorized_transcript_artifact(
+            conn,
+            roic_artifact,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        conn.commit()
+
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(ingest, "_TRANSCRIPT_DIRS", (processed_dir, raw_dir))
+    monkeypatch.setattr(ingest, "current_utc_date", lambda: date(2026, 11, 20))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "BN",
+            "--receipt-id",
+            roic_receipt_id,
+        ],
+    )
+    assert ingest.main() == 0
+
+    # 2) Higher-tier Google Finance Beta verbatim upgrade with __<sha8> suffix
+    gfb_text = (
+        "[Operator Instructions]\n"
+        "Good morning, welcome to Brookfield Q3 2026.\n"
+        "Bruce Flatt, CEO, Brookfield\n"
+        "2m 16s\n" + ("Distributable earnings grew 16 percent year over year. " * 45) + "\n"
+        "Étienne Ricard, Analyst, BMO Capital Markets\n"
+        "48m 5s\n"
+        "Where do you see the best capital allocation returns?\n"
+        "Nick Goodman, President, Brookfield\n"
+        "48m 33s\n"
+        "Hi, Étienne. We see strong returns across asset management and wealth solutions.\n"
+    )
+    gfb_bytes = gfb_text.encode("utf-8")
+    gfb_sha8 = hashlib.sha256(gfb_bytes).hexdigest()[:8]
+    gfb_name = f"BN_Q3_2026__{gfb_sha8}.txt"
+    (raw_dir / gfb_name).write_bytes(gfb_bytes)
+
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        gfb_req = TranscriptAcquisitionRequest(
+            schema_version="transcript-acquisition-request@2",
+            entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+            canonical_ticker="BN",
+            fiscal_year=2026,
+            fiscal_quarter=3,
+            as_of=date(2026, 11, 20),
+            source_type=SourceType.IR_DOC,
+            document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+            provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+            owner_requested=True,
+            existing_artifact=False,
+            existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+            source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+            source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+        )
+        gfb_auth = authorize_transcript_request(conn, gfb_req)
+        # Mismatched __<sha8> suffix must fail closed
+        wrong_sha8 = "00000000" if gfb_sha8 != "00000000" else "ffffffff"
+        with pytest.raises(ValueError, match="canonical document path does not match"):
+            stage_authorized_payload(
+                gfb_auth,
+                payload=gfb_bytes,
+                private_root=staging_root,
+                source_url="https://www.google.com/finance/beta/quote/BN:NYSE",
+                canonical_document_path=Path(f"transcripts/raw/BN_Q3_2026__{wrong_sha8}.txt"),
+            )
+        gfb_artifact = stage_authorized_payload(
+            gfb_auth,
+            payload=gfb_bytes,
+            private_root=staging_root,
+            source_url="https://www.google.com/finance/beta/quote/BN:NYSE",
+            canonical_document_path=Path(f"transcripts/raw/{gfb_name}"),
+        )
+        gfb_receipt_id = persist_authorized_transcript_artifact(
+            conn,
+            gfb_artifact,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        conn.commit()
+
+    index_manager.register_transcript(
+        "BN",
+        2026,
+        "Q3",
+        source="aggregator_google_finance_beta",
+        filepath=gfb_name,
+        has_qa=True,
+        acquisition_receipt=gfb_artifact,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "BN",
+            "--receipt-id",
+            gfb_receipt_id,
+        ],
+    )
+    assert ingest.main() == 0
+
+    assert (processed_dir / "BN_Q3_2026.txt").read_bytes() == old_roic_bytes
+    assert (processed_dir / gfb_name).read_bytes() == gfb_bytes
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, document_id, source, has_qa_section, is_current, "
+            "superseded_by_transcript_id FROM transcripts WHERE ticker='BN' ORDER BY id"
+        ).fetchall()
+        assert len(rows) == 2
+        old_row, new_row = rows[0], rows[1]
+        assert old_row["source"] == "aggregator_roic"
+        assert old_row["is_current"] == 0
+        assert old_row["superseded_by_transcript_id"] == new_row["id"]
+        assert new_row["source"] == "aggregator_google_finance_beta"
+        assert new_row["has_qa_section"] == 1
+        assert new_row["is_current"] == 1
+
+        binding = current_transcript_scan_binding(conn, int(new_row["id"]))
+        assert binding is not None
+        assert binding.transcript_acquisition_receipt_id == gfb_receipt_id
+
+        evidence = coverage_audit._transcript_evidence(  # pyright: ignore[reportPrivateUsage]
+            conn,
+            repo_root=repo_root,
+            ticker="BN",
+            fiscal_year=2026,
+            fiscal_quarter=3,
+            period_end=date(2026, 9, 30),
+            cutoff_at=datetime.now(UTC).replace(year=2099),
+        )
+        assert evidence["complete"] is True
+        assert evidence["receipt_id"] == gfb_receipt_id
+        assert evidence["verification_reason_codes"] == []
+
+    # 3) Non-December FYE ticker (BIRK 09-30) maps Q3 2026 -> 2026-06-30 end-to-end
+    birk_text = (
+        "[Operator Instructions]\n"
+        "Oliver Reichert, Director, BIRKENSTOCK Holding plc\n"
+        "1m 00s\n" + ("Strong Q3 fiscal 2026 revenue growth across Americas and EMEA. " * 45) + "\n"
+        "Matthew Boss, Analyst, JPMorgan\n"
+        "25m 00s\n"
+        "How are gross margins trending?\n"
+    )
+    birk_bytes = birk_text.encode("utf-8")
+    (raw_dir / "BIRK_Q3_2026.txt").write_bytes(birk_bytes)
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        birk_req = TranscriptAcquisitionRequest(
+            schema_version="transcript-acquisition-request@2",
+            entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+            canonical_ticker="BIRK",
+            fiscal_year=2026,
+            fiscal_quarter=3,
+            as_of=date(2026, 11, 20),
+            source_type=SourceType.IR_DOC,
+            document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+            provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+            owner_requested=True,
+            existing_artifact=False,
+            existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+            source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+            source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+        )
+        birk_auth = authorize_transcript_request(conn, birk_req)
+        birk_artifact = stage_authorized_payload(
+            birk_auth,
+            payload=birk_bytes,
+            private_root=staging_root,
+            source_url="https://www.google.com/finance/beta/quote/BIRK:NYSE",
+            canonical_document_path=Path("transcripts/raw/BIRK_Q3_2026.txt"),
+        )
+        birk_receipt_id = persist_authorized_transcript_artifact(
+            conn,
+            birk_artifact,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        conn.commit()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ingest_transcripts.py",
+            "--db",
+            str(db_path),
+            "--ticker",
+            "BIRK",
+            "--receipt-id",
+            birk_receipt_id,
+        ],
+    )
+    assert ingest.main() == 0
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        birk_row = conn.execute(
+            "SELECT id, period_end, source FROM transcripts WHERE ticker='BIRK'"
+        ).fetchone()
+        assert birk_row is not None
+        assert str(birk_row["period_end"]).startswith("2026-06-30")
+        assert birk_row["source"] == "aggregator_google_finance_beta"
+        birk_binding = current_transcript_scan_binding(conn, int(birk_row["id"]))
+        assert birk_binding is not None
+        assert birk_binding.transcript_acquisition_receipt_id == birk_receipt_id
+        birk_evidence = coverage_audit._transcript_evidence(  # pyright: ignore[reportPrivateUsage]
+            conn,
+            repo_root=repo_root,
+            ticker="BIRK",
+            fiscal_year=2026,
+            fiscal_quarter=3,
+            period_end=date(2026, 6, 30),
+            cutoff_at=datetime.now(UTC).replace(year=2099),
+        )
+        assert birk_evidence["complete"] is True
+        assert birk_evidence["receipt_id"] == birk_receipt_id
+
+
 def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
     tmp_path: Path,
     migrated_db: Callable[..., Path],

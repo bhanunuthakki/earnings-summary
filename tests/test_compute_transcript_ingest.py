@@ -13,6 +13,7 @@ from compute.transcript_ingest import (
     SpeakerTurn,
     _infer_fiscal_period_type,  # pyright: ignore[reportPrivateUsage]
     detect_qa_section,
+    lookup_fiscal_year_end,
     map_to_period,
     parse_transcript_filename,
     qa_status_to_db_value,
@@ -43,6 +44,77 @@ def test_parse_filename_handles_dotted_ticker() -> None:
     parsed = parse_transcript_filename(Path("LSPD.TO_Q2_2026.pdf"))
     assert parsed is not None
     assert parsed.ticker == "LSPD.TO"
+
+
+def test_parse_filename_accepts_content_addressed_sha8_suffix() -> None:
+    """Optional 8-hex-char `__<sha8>` suffix parses to the same canonical period identity."""
+    assert parse_transcript_filename(Path("transcripts/raw/BN_Q3_2026__402efbad.txt")) == (
+        ParsedFilename(ticker="BN", quarter_idx=3, fiscal_year_label=2026)
+    )
+    assert parse_transcript_filename(Path("LSPD.TO_Q2_2026__0123abcd.pdf")) == (
+        ParsedFilename(ticker="LSPD.TO", quarter_idx=2, fiscal_year_label=2026)
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "BN_Q3_2026__402efba.txt",  # 7 hex chars
+        "BN_Q3_2026__402efbad9.txt",  # 9 hex chars
+        "BN_Q3_2026__402EFBAD.txt",  # uppercase hex
+        "BN_Q3_2026__nothex12.txt",  # non-hex
+        "BN_Q3_2026_402efbad.txt",  # single underscore
+        "BN_Q3_2026__extra__402efbad.txt",  # extra segment
+    ],
+)
+def test_parse_filename_rejects_invalid_suffixes(name: str) -> None:
+    assert parse_transcript_filename(Path(name)) is None
+
+
+def test_map_to_period_uses_tracked_fiscal_year_end() -> None:
+    """Non-December FYE issuers map via `fiscal_year_end` when not in `FILENAME_CALENDARS`."""
+    assert map_to_period(
+        ParsedFilename(ticker="BIRK", quarter_idx=3, fiscal_year_label=2026),
+        fiscal_year_end="09-30",
+    ).period_end == datetime(2026, 6, 30)
+    assert map_to_period(
+        ParsedFilename(ticker="TJX", quarter_idx=3, fiscal_year_label=2027),
+        fiscal_year_end="01-31",
+    ).period_end == datetime(2026, 10, 31)
+    assert map_to_period(
+        ParsedFilename(ticker="TWST", quarter_idx=4, fiscal_year_label=2026),
+        fiscal_year_end="09-30",
+    ).period_end == datetime(2026, 9, 30)
+    assert map_to_period(
+        ParsedFilename(ticker="VFC", quarter_idx=2, fiscal_year_label=2027),
+        fiscal_year_end="03-31",
+    ).period_end == datetime(2026, 9, 30)
+    assert map_to_period(
+        ParsedFilename(ticker="QCOM", quarter_idx=4, fiscal_year_label=2026),
+        fiscal_year_end="09-28",
+    ).period_end == datetime(2026, 9, 30)
+    # FILENAME_CALENDARS takes precedence even if a caller passes a different FYE.
+    assert map_to_period(
+        ParsedFilename(ticker="VEEV", quarter_idx=1, fiscal_year_label=2026),
+        fiscal_year_end="12-31",
+    ).period_end == datetime(2025, 4, 30)
+    # Without fiscal_year_end, backward-compatible CALENDAR_YEAR fallback remains.
+    assert map_to_period(
+        ParsedFilename(ticker="BIRK", quarter_idx=3, fiscal_year_label=2026)
+    ).period_end == datetime(2026, 9, 30)
+
+
+def test_lookup_fiscal_year_end_handles_missing_table_and_nulls() -> None:
+    import sqlite3
+
+    empty_conn = sqlite3.connect(":memory:")
+    assert lookup_fiscal_year_end(empty_conn, "BIRK") is None
+    empty_conn.execute("CREATE TABLE tracked_companies (ticker TEXT, fiscal_year_end TEXT)")
+    empty_conn.execute("INSERT INTO tracked_companies VALUES ('BIRK', '09-30')")
+    empty_conn.execute("INSERT INTO tracked_companies VALUES ('NULLFYE', NULL)")
+    assert lookup_fiscal_year_end(empty_conn, "birk") == "09-30"
+    assert lookup_fiscal_year_end(empty_conn, "NULLFYE") is None
+    assert lookup_fiscal_year_end(empty_conn, "UNKNOWN") is None
 
 
 def test_calendar_period_mapping() -> None:

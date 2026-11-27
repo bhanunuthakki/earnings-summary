@@ -26,7 +26,12 @@ from pathlib import Path
 from typing import cast
 
 from compute import evidence_snapshot
-from compute.fiscal_calendar import CALENDAR_YEAR, FILENAME_CALENDARS, period_end_for
+from compute.fiscal_calendar import (
+    CALENDAR_YEAR,
+    FILENAME_CALENDARS,
+    calendar_id_from_fye,
+    period_end_for,
+)
 from models.documents import DocType, FetchStatus, SourceType
 from models.facts import FiscalPeriodType
 from pipeline.transcript_acquisition import (
@@ -39,7 +44,9 @@ from runtime.pdf_text import extract_pdf_text
 from transcripts.acquisition_semantics import TranscriptProvider
 from transcripts.source_reliability import choose_winner, classify_transcript_source
 
-_FILENAME_RE = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<year>20\d{2})$")
+_FILENAME_RE = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<year>20\d{2})(?:__(?P<digest>[0-9a-f]{8}))?$"
+)
 
 
 @dataclass(frozen=True)
@@ -56,7 +63,7 @@ class PeriodMapping:
 
 
 def parse_transcript_filename(path: Path) -> ParsedFilename | None:
-    """Match `<TICKER>_Q<N>_<YYYY>.{pdf,txt}`. Returns None on miss (e.g., master PDFs)."""
+    """Match `<TICKER>_Q<N>_<YYYY>[__<sha8>].{pdf,txt}`. Returns None on miss."""
     m = _FILENAME_RE.match(path.stem)
     if m is None:
         return None
@@ -67,12 +74,36 @@ def parse_transcript_filename(path: Path) -> ParsedFilename | None:
     )
 
 
-def map_to_period(parsed: ParsedFilename) -> PeriodMapping:
+def lookup_fiscal_year_end(conn: sqlite3.Connection, ticker: str) -> str | None:
+    """Return `tracked_companies.fiscal_year_end` for `ticker`, or None if unavailable."""
+    try:
+        row = conn.execute(
+            "SELECT fiscal_year_end FROM tracked_companies WHERE UPPER(ticker) = ? LIMIT 1",
+            (ticker.upper(),),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None or row[0] is None:
+        return None
+    value = str(row[0]).strip()
+    return value or None
+
+
+def map_to_period(
+    parsed: ParsedFilename,
+    *,
+    fiscal_year_end: str | None = None,
+) -> PeriodMapping:
     """Resolve (ticker, Qn, year_label) to a calendar period_end and fiscal_period_type."""
     # Filename inputs historically reject invalid quarters with KeyError.
     if parsed.quarter_idx not in (1, 2, 3, 4):
         raise KeyError(parsed.quarter_idx)
-    calendar = FILENAME_CALENDARS.get(parsed.ticker, CALENDAR_YEAR)
+    if parsed.ticker in FILENAME_CALENDARS:
+        calendar = FILENAME_CALENDARS[parsed.ticker]
+    elif fiscal_year_end:
+        calendar = calendar_id_from_fye(fiscal_year_end)
+    else:
+        calendar = CALENDAR_YEAR
     endpoint = period_end_for(calendar, parsed.fiscal_year_label, parsed.quarter_idx)
     period_end = datetime.combine(endpoint, datetime.min.time())
     fiscal_period_type = FiscalPeriodType(f"Q{parsed.quarter_idx}")
@@ -814,7 +845,7 @@ def _ingest_one(
         else sha256_of(file_path)
     )
     existing = find_existing_document_id(conn, sha)
-    period = map_to_period(parsed)
+    period = map_to_period(parsed, fiscal_year_end=lookup_fiscal_year_end(conn, parsed.ticker))
     document_source_type = SourceType.TRANSCRIPT_AUDIO
     document_source_url: str | None = None
     if authorized_artifact is not None:
