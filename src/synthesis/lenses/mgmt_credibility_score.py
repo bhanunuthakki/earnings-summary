@@ -171,7 +171,7 @@ def _format_commitments(
 
 LENS = Lens(
     name="mgmt_credibility_score",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="ticker",
     prompt_template=_PROMPT_MGMT_CREDIBILITY,
     build_context=_ctx_mgmt_credibility,

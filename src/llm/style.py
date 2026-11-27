@@ -52,6 +52,8 @@ FINANCIAL_GROUNDING_BLOCK: str = """**Financial narrative grounding:**
 - Before completing the narrative, check each factual assertion against the supplied corpus, including
   its financial meaning and qualifiers. Use the supplied calculations; do not substitute invented math.
   Keep unsupported claims out of the answer. A source URL or matching number alone does not verify meaning.
+- State conclusions and supporting evidence directly; omit filler, restatement, and unrequested
+  process narration, and anchor claims to named sources and periods.
 - Do not claim that your self-check certifies an output. The application must verify the complete output
   before release or cache promotion and retain its source/claim evidence and verification disposition.
 """
@@ -90,6 +92,11 @@ def compose_brief_prompt(body: str) -> str:
     last instruction the model sees, which empirically improves rule
     adherence vs. burying it in a long preamble. The ``---`` separator
     keeps the block visually distinct in raw prompt logs.
+
+    Prefix-cache tradeoff: Gemini 4 implicit caching activates on shared
+    prefixes >=4,096 tokens, so callers with large static instructions and
+    reference corpora should keep that shared context in the stable prefix
+    while keeping this short trailing block as the closing anchor.
     """
     return f"{body.rstrip()}\n\n---\n\n{NUMBER_FORMATTING_BLOCK}"
 

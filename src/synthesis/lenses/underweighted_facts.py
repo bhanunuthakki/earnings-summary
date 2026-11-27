@@ -82,7 +82,7 @@ def _ctx_underweighted(ticker: str | None, repo_root: Path) -> LensContext | Non
 
 LENS = Lens(
     name="underweighted_facts",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="ticker",
     prompt_template=_PROMPT_UNDERWEIGHTED,
     build_context=_ctx_underweighted,

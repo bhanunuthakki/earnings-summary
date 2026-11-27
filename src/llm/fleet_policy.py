@@ -12,14 +12,15 @@ from types import ModuleType
 AGENT_INSTRUCTIONS_HOME_ENV_VAR = "AGENT_INSTRUCTIONS_HOME"
 PRIMARY_BACKEND_ENV_VAR = "LLM_PRIMARY_SUBSCRIPTION_BACKEND"
 FALLBACK_DISABLED_ENV_VAR = "LLM_SUBSCRIPTION_FALLBACK_DISABLED"
-_SUPPORTED_BACKENDS = ("codex", "claude")
+_SUPPORTED_BACKENDS = ("claude",)
+_DEFAULT_PREFERRED_PROVIDERS = ("gemini", "claude")
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _candidate_roots() -> tuple[Path, ...]:
     configured = os.environ.get(AGENT_INSTRUCTIONS_HOME_ENV_VAR)
-    sibling = Path(__file__).resolve().parents[3] / "agent-instructions"
-    return tuple(path for path in (Path(configured) if configured else None, sibling) if path)
+    ancestors = tuple(parent / "agent-instructions" for parent in Path(__file__).resolve().parents)
+    return tuple(path for path in (Path(configured) if configured else None, *ancestors) if path)
 
 
 @lru_cache(maxsize=1)
@@ -72,6 +73,24 @@ def _explicit_environment_route() -> tuple[str, ...]:
     if fallback_disabled:
         return (primary,)
     return (primary, *tuple(backend for backend in _SUPPORTED_BACKENDS if backend != primary))
+
+
+def preferred_provider_order() -> tuple[str, ...]:
+    """Return the fleet-preferred provider order (for example, ('gemini', 'claude'))."""
+    try:
+        module = _policy_module()
+    except RuntimeError:
+        return _DEFAULT_PREFERRED_PROVIDERS
+    return tuple(str(p) for p in module.preferred_provider_order())
+
+
+def subscription_fallback_disabled() -> bool:
+    """Return whether provider-family fallback is explicitly disabled by env."""
+    try:
+        module = _policy_module()
+    except RuntimeError:
+        return os.environ.get(FALLBACK_DISABLED_ENV_VAR, "").strip().lower() in _TRUE_VALUES
+    return bool(module.is_subscription_fallback_disabled())
 
 
 def policy_environment_names() -> tuple[str, str]:

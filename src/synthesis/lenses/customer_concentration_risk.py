@@ -132,7 +132,7 @@ def _ctx_customer_concentration_risk(ticker: str | None, repo_root: Path) -> Len
 
 LENS = Lens(
     name="customer_concentration_risk",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="portfolio",
     prompt_template=_PROMPT_CUSTOMER_CONCENTRATION_RISK,
     build_context=_ctx_customer_concentration_risk,

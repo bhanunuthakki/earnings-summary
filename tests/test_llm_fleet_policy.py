@@ -18,17 +18,23 @@ def test_explicit_environment_route_supports_isolated_runners(
     monkeypatch.setenv(fleet_policy.PRIMARY_BACKEND_ENV_VAR, "claude")
     monkeypatch.delenv(fleet_policy.FALLBACK_DISABLED_ENV_VAR, raising=False)
 
-    assert fleet_policy.subscription_route() == ("claude", "codex")
+    assert fleet_policy.subscription_route() == ("claude",)
+    assert fleet_policy.preferred_provider_order() == ("gemini", "claude")
+    assert fleet_policy.subscription_fallback_disabled() is False
+
+    monkeypatch.setenv(fleet_policy.FALLBACK_DISABLED_ENV_VAR, "1")
+    assert fleet_policy.subscription_fallback_disabled() is True
 
 
-def test_explicit_environment_route_can_fail_closed(
+def test_explicit_environment_route_rejects_disabled_codex(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(fleet_policy, "_policy_module", _missing_policy)
     monkeypatch.setenv(fleet_policy.PRIMARY_BACKEND_ENV_VAR, "codex")
     monkeypatch.setenv(fleet_policy.FALLBACK_DISABLED_ENV_VAR, "1")
 
-    assert fleet_policy.subscription_route() == ("codex",)
+    with pytest.raises(RuntimeError, match=fleet_policy.PRIMARY_BACKEND_ENV_VAR):
+        fleet_policy.subscription_route()
 
 
 def test_missing_policy_requires_an_explicit_primary(

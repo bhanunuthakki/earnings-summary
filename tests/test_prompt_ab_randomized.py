@@ -407,3 +407,13 @@ def test_stale_proposed_experiment_does_not_lock_purpose_out(tmp_path: Path) -> 
     assert "fresh_p" in live  # a genuinely live experiment still blocks
     assert "stale_p" not in live  # a stuck one expires out of the exclusion
     assert "stale_running" not in live
+
+
+def test_semantic_blueprint_strategy_is_registered_and_renderable() -> None:
+    from llm.prompt_strategies import STRATEGY_BY_KEY, render_strategy_directive
+
+    strat = STRATEGY_BY_KEY["semantic_blueprint"]
+    assert strat.combinable is True
+    rendered = render_strategy_directive((strat,))
+    assert "Goal, Context, Task, Format, Verification" in rendered
+    assert "prefix" in rendered

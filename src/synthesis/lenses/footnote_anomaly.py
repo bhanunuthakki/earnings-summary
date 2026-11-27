@@ -97,7 +97,7 @@ def _ctx_footnote_anomaly(ticker: str | None, repo_root: Path) -> LensContext | 
 
 LENS = Lens(
     name="footnote_anomaly",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="ticker",
     prompt_template=_PROMPT_FOOTNOTE_ANOMALY,
     build_context=_ctx_footnote_anomaly,

@@ -166,12 +166,23 @@ STRATEGIES: tuple[EditStrategy, ...] = (
         ),
     ),
     EditStrategy(
+        key="semantic_blueprint",
+        label="Structure as a concise semantic blueprint",
+        directive=(
+            "Organize instructions into concise semantic sections (Goal, Context, Task, "
+            "Format, Verification), keep static instructions and shared context at the "
+            "prefix ahead of dynamic input, and place a short anchoring cue "
+            '("Based on the preceding evidence...") immediately before the final task.'
+        ),
+    ),
+    EditStrategy(
         key="ordering_swap",
         label="Reorder instructions vs data",
         directive=(
             "Move the key instruction block so it is positioned for maximum "
-            "adherence relative to the data region (typically restating the "
-            "critical constraints AFTER a long data block). Reordering only — the "
+            "adherence relative to the data region (typically restating critical "
+            "constraints AFTER a long data block while preserving static prefix "
+            "stability where prompt caching applies). Reordering only — the "
             "instruction text itself must survive essentially intact."
         ),
         combinable=False,  # structural: stacking it with other edits confounds attribution

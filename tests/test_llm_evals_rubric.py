@@ -668,3 +668,115 @@ def test_spot_check_empty_db_is_clean(
     mod = _load_execution_module("spot_check_eval_judge")
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     assert mod.main(["--repo-root", str(repo)]) == 0
+
+
+# ----------------------------------------------------------------------------
+# weighted facets, shared includes, and hygiene gates (MBI rubric family)
+# ----------------------------------------------------------------------------
+
+
+def test_mbi_rubric_family_loads_weights_and_shared_gates() -> None:
+    for purpose, expected_thr in (
+        ("mbi_deep_dive", 0.85),
+        ("pre_earnings_preview", 0.80),
+        ("post_earnings_readout", 0.80),
+    ):
+        r = load_rubric(PROJECT_ROOT / "evals" / "rubrics" / f"{purpose}.md", purpose=purpose)
+        assert r.pass_threshold == pytest.approx(expected_thr)
+        assert len(r.facet_ids) == 5
+        assert sum(r.facet_weights.values()) == pytest.approx(1.0)
+        assert r.gate_caps == {"grounding_and_attribution": 0.0}
+        assert "Bounded-Gap Analysis Policy" in r.text
+        assert "lack of imagination" in r.text
+        assert "historical-to-forecast" in r.text
+
+
+def test_weighted_rubric_include_sha_weights_and_gate_caps(tmp_path: Path) -> None:
+    inc = tmp_path / "_shared.md"
+    inc.write_text("## Gate: factual [cap: 0.0] — Grounded\n## Gate: prose [cap: 0.65] — Clean\n")
+    rubric_path = tmp_path / "mbi_test.md"
+    rubric_path.write_text(
+        "# Rubric: mbi_test (v1)\n\n"
+        "Pass threshold: 0.85\n\n"
+        "Include: _shared.md\n\n"
+        "## Facet: a [weight: 0.70] — Heavy\nDesc\n\n"
+        "## Facet: b [weight: 0.30] — Light\nDesc\n"
+    )
+    r1 = load_rubric(rubric_path, purpose="mbi_test")
+    assert r1.facet_weights == {"a": 0.7, "b": 0.3}
+    assert r1.gate_caps == {"factual": 0.0, "prose": 0.65}
+
+    # Modifying the included file changes sha256
+    inc.write_text("## Gate: factual [cap: 0.0] — Strict\n## Gate: prose [cap: 0.65] — Clean\n")
+    r2 = load_rubric(rubric_path, purpose="mbi_test")
+    assert r2.sha256 != r1.sha256
+
+    # Both gates pass -> weighted rollup passes (0.7*1.0 + 0.3*0.5 = 0.85)
+    pass_verdict = json.dumps(
+        {
+            "gate_scores": {"factual": 1.0, "prose": 1.0},
+            "facet_scores": {"a": 1.0, "b": 0.5},
+            "rationale": "weighted pass",
+        }
+    )
+    res_pass = judge_item(r2, _item(), run_id="w1", caller=_caller_returning(pass_verdict))
+    assert res_pass.passed and res_pass.score == pytest.approx(0.85)
+
+    # Prose gate violated -> overall capped at 0.65 -> fails 0.85 threshold
+    prose_fail = json.dumps(
+        {
+            "gate_scores": {"factual": 1.0, "prose": 0.0},
+            "facet_scores": {"a": 1.0, "b": 1.0},
+            "rationale": "boilerplate prose",
+        }
+    )
+    res_prose = judge_item(r2, _item(), run_id="w2", caller=_caller_returning(prose_fail))
+    assert not res_prose.passed and res_prose.score == pytest.approx(0.65)
+    assert res_prose.failure_stage == "below_threshold"
+
+    # Grounding gate violated -> hard ceiling 0.0
+    ground_fail = json.dumps(
+        {
+            "gate_scores": {"factual": 0.0, "prose": 1.0},
+            "facet_scores": {"a": 1.0, "b": 1.0},
+            "rationale": "fabricated stat",
+        }
+    )
+    res_ground = judge_item(r2, _item(), run_id="w3", caller=_caller_returning(ground_fail))
+    assert not res_ground.passed and res_ground.score == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    ("body", "fragment"),
+    [
+        (
+            "# Rubric: w_bad (v1)\nPass threshold: 0.8\n"
+            "## Facet: a [weight: 0.6] — x\n## Facet: b [weight: 0.6] — y\n",
+            "sum to",
+        ),
+        (
+            "# Rubric: w_bad (v1)\nPass threshold: 0.8\n"
+            "## Facet: a [weight: 0.6] — x\n## Facet: b — y\n",
+            "mixed weighted",
+        ),
+        (
+            "# Rubric: w_bad (v1)\nPass threshold: 0.8\nInclude: ../outside.md\n## Facet: a — x\n",
+            "escapes rubric directory",
+        ),
+        (
+            "# Rubric: w_bad (v1)\nPass threshold: 0.8\nInclude: missing.md\n## Facet: a — x\n",
+            "not found",
+        ),
+    ],
+)
+def test_load_rubric_rejects_bad_weights_and_includes(
+    tmp_path: Path, body: str, fragment: str
+) -> None:
+    p = tmp_path / "w_bad.md"
+    p.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError, match="rubric"):
+        try:
+            load_rubric(p, purpose="w_bad")
+        except ValueError as exc:
+            assert fragment in str(exc)
+            raise

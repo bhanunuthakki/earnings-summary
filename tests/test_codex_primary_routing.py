@@ -184,6 +184,7 @@ def test_default_purpose_routes_to_codex_before_claude(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     seen: dict[str, object] = {}
 
     def fake_codex(prompt: str, **kwargs: object) -> str:
@@ -211,6 +212,7 @@ def test_codex_primary_failure_falls_back_to_claude(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     calls: list[str] = []
 
     def fail_codex(prompt: str, **kwargs: object) -> str:
@@ -235,6 +237,7 @@ def test_codex_then_claude_failure_does_not_reenter_codex(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     calls: list[str] = []
 
     def fail_codex(prompt: str, **kwargs: object) -> str:
@@ -268,6 +271,7 @@ def test_codex_primary_preserves_the_purpose_quality_tier(
     monkeypatch: pytest.MonkeyPatch, purpose: str, expected: str
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     seen: dict[str, object] = {}
 
     def fake_codex(prompt: str, **kwargs: object) -> str:
@@ -283,6 +287,7 @@ def test_explicit_claude_model_bypasses_codex_primary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     seen: dict[str, object] = {}
 
     def fake_claude(prompt: str, **kwargs: object) -> str:
@@ -339,6 +344,7 @@ def test_web_default_purpose_routes_to_codex_before_claude(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     seen: dict[str, object] = {}
 
     def fake_codex(prompt: str, **kwargs: object) -> str:
@@ -370,6 +376,7 @@ def test_web_codex_primary_failure_falls_back_to_claude_web(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     _web_claude_fixture(monkeypatch)
     calls: list[str] = []
 
@@ -409,6 +416,7 @@ def test_web_codex_then_claude_web_failure_does_not_reenter_codex(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     _web_claude_fixture(monkeypatch)
     calls: list[str] = []
 
@@ -444,6 +452,7 @@ def test_web_explicit_claude_model_bypasses_codex_primary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     _web_claude_fixture(monkeypatch)
 
     def fixture_callback_1(*_args: object, **_kwargs: object) -> None:
@@ -637,6 +646,7 @@ def test_uncited_codex_web_answer_falls_back_to_claude(
     say-nothing output and zero citations -> treated as operational failure,
     Claude serves the answer."""
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     # The Claude leg runs for real here, so it needs the same CLI-setup bypass
     # the other Claude-leg tests use — without it this passes on a machine that
     # HAS the claude binary and fails in CI, which is exactly what it did.
@@ -673,6 +683,7 @@ def test_cited_codex_web_answer_is_served_without_fallback(
     """Discriminating half: a Codex answer that DOES cite is served directly —
     proving the gate keys on grounding, not on 'is it Codex'."""
     monkeypatch.setenv("LLM_PRIMARY_SUBSCRIPTION_BACKEND", "codex")
+    monkeypatch.setattr(llm_cli, "subscription_route", lambda: ("codex", "claude"))
     calls: list[str] = []
 
     def fake_codex(prompt: str, **kwargs: object) -> str:

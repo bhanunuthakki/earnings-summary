@@ -52,6 +52,7 @@ import os
 import re
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -102,22 +103,13 @@ def gemini_http_error_type() -> type[Exception]:
     return httpx.HTTPError
 
 
-# Gemini API tiers for analytical writing (Pro) vs the short structured calls
-# that run on Haiku under the Claude backend (Flash). The tier derivation in
-# gemini_model_for keeps these two aligned with LLM_MODELS so retuning a
-# purpose's Claude tier automatically retunes its Gemini mirror.
-# Pro = gemini-3.1-pro-preview (current Pro baseline; gemini-3-pro-preview was
-# discontinued 2026-03 and there is no 3.5 Pro — only 3.5 Flash).
-# Flash = gemini-3-flash-preview (current Gemini 3 Flash preview id; self-anneals
-# below if the API 404s it — preview aliases rotate without notice).
-GEMINI_BACKEND_DEFAULT_MODEL = "gemini-3.1-pro-preview"
-GEMINI_BACKEND_FAST_MODEL = "gemini-3-flash-preview"
-# Stable GA fallback for the fast tier (replaces deprecated gemini-2.5-flash,
-# which auto-routes to gemini-3.5-flash-lite on 2026-12-01). If
-# GEMINI_BACKEND_FAST_MODEL (a preview alias) returns NotFound, call_gemini
-# self-anneals: it writes this id into _effective_fast_model and retries — all
-# subsequent in-process calls then use the fallback automatically without
-# operator intervention.
+# Gemini API tiers: Gemini 4 Neon (driver) vs Gemini 4 Hydrogen (workhorse).
+# Tier derivation in gemini_model_for keeps these aligned with LLM_MODELS so
+# fast-classifier purposes map to Hydrogen and driver/analytical purposes map to Neon.
+GEMINI_BACKEND_DEFAULT_MODEL = "gemini-4-neon"
+GEMINI_BACKEND_FAST_MODEL = "gemini-4-hydrogen"
+# Stable GA fallback if the workhorse model ID returns NotFound:
+# call_gemini self-anneals via live catalog lookup -> _GEMINI_FAST_MODEL_FALLBACK.
 _GEMINI_FAST_MODEL_FALLBACK = "gemini-3.5-flash-lite"
 
 # Explicit per-purpose Gemini model pins. Ships EMPTY: the default tier
@@ -296,8 +288,44 @@ def _anneal_models(broken: str, client: object) -> list[str]:
 
 
 def _is_flash_model(model: str) -> bool:
-    """Return whether ``model`` belongs to the governed Flash family."""
-    return re.match(r"^gemini-[\d.]+-flash(?:-|$)", model) is not None
+    """Return whether ``model`` belongs to the governed workhorse/Flash family."""
+    return (
+        model == "gemini-4-hydrogen" or re.match(r"^gemini-[\d.]+-flash(?:-|$)", model) is not None
+    )
+
+
+def _load_gemini_key_from_fleet_env() -> str | None:
+    """Resolve GEMINI_API_KEY (or GOOGLE_API_KEY) from agent-instructions .env fallback."""
+    configured_home = os.environ.get("AGENT_INSTRUCTIONS_HOME")
+    ancestors = tuple(
+        parent / "agent-instructions" / ".env" for parent in Path(__file__).resolve().parents
+    )
+    candidates = (
+        Path(configured_home) / ".env" if configured_home else None,
+        *ancestors,
+    )
+    for env_path in candidates:
+        if env_path is None or not env_path.is_file():
+            continue
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        values: dict[str, str] = {}
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            if key in {"GEMINI_API_KEY", "GOOGLE_API_KEY"}:
+                cleaned = val.strip().strip('"').strip("'")
+                if cleaned:
+                    values[key] = cleaned
+        resolved = values.get("GEMINI_API_KEY") or values.get("GOOGLE_API_KEY")
+        if resolved:
+            return resolved
+    return None
 
 
 def _verify_gemini_setup_once() -> None:
@@ -312,7 +340,11 @@ def _verify_gemini_setup_once() -> None:
     global _gemini_setup_verified, _gemini_api_key
     if _gemini_setup_verified:
         return
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = (
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+        or _load_gemini_key_from_fleet_env()
+    )
     if not api_key:
         raise llm_cli.LLMSetupError(f"No Gemini API key configured. {GEMINI_API_KEY_HINT}")
     _gemini_api_key = api_key
@@ -325,8 +357,10 @@ def usage_meta_from_response(
     """Gemini ``usage_metadata`` → the claude-shaped usage meta the shared
     ledger writer (llm.ledger.record_llm_call → usage_from_json_meta) consumes.
 
-    Token mapping: ``prompt_token_count`` → input_tokens, ``candidates_token_count``
-    → output_tokens, ``cached_content_token_count`` → cache_read_input_tokens.
+    Token mapping: ``prompt_token_count`` → input_tokens,
+    ``candidates_token_count + thoughts_token_count`` → output_tokens (Gemini 4
+    bills thinking tokens at the output rate), ``cached_content_token_count`` →
+    cache_read_input_tokens.
     Cost is computed from the public API list price for ``model`` (pass the
     resolved model id from the caller). Unknown or absent model → 0.0 (cost
     unknown, not free). Defensive throughout: junk/missing fields yield zero
@@ -335,6 +369,8 @@ def usage_meta_from_response(
     u = usage or {}
     prompt_tokens = _safe_int(u.get("prompt_token_count"))
     candidate_tokens = _safe_int(u.get("candidates_token_count"))
+    thought_tokens = _safe_int(u.get("thoughts_token_count"))
+    output_tokens = candidate_tokens + thought_tokens
     cached_tokens = _safe_int(u.get("cached_content_token_count"))
 
     from llm.model_ladder import estimated_call_usd
@@ -342,13 +378,13 @@ def usage_meta_from_response(
     return {
         "usage": {
             "input_tokens": prompt_tokens,
-            "output_tokens": candidate_tokens,
+            "output_tokens": output_tokens,
             "cache_read_input_tokens": cached_tokens,
         },
         "total_cost_usd": estimated_call_usd(
             model,
             prompt_tokens,
-            candidate_tokens,
+            output_tokens,
             cached_input_tokens=cached_tokens,
         ),
     }
@@ -476,7 +512,8 @@ def call_gemini(
             started_at = datetime.now(UTC)
             t0 = time.monotonic()
             try:
-                response = client.models.generate_content(model=_try_model, contents=prompt)
+                # Pass plain str: google-genai drops str subclasses (RenderedPrompt) to `{}`.
+                response = client.models.generate_content(model=_try_model, contents=str(prompt))
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 text = (response.text or "").strip() if hasattr(response, "text") else ""
                 if not text:
@@ -488,6 +525,7 @@ def call_gemini(
                 usage_dict: dict[str, object] = {
                     "prompt_token_count": getattr(usage_obj, "prompt_token_count", 0),
                     "candidates_token_count": getattr(usage_obj, "candidates_token_count", 0),
+                    "thoughts_token_count": getattr(usage_obj, "thoughts_token_count", 0),
                     "cached_content_token_count": getattr(
                         usage_obj, "cached_content_token_count", 0
                     ),

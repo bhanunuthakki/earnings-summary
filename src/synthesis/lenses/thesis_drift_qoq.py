@@ -99,7 +99,7 @@ def _ctx_thesis_drift(ticker: str | None, repo_root: Path) -> LensContext | None
 
 LENS = Lens(
     name="thesis_drift_qoq",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="ticker",
     prompt_template=_PROMPT_THESIS_DRIFT,
     build_context=_ctx_thesis_drift,

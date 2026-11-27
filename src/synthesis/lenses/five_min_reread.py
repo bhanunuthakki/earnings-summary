@@ -117,7 +117,7 @@ def _ctx_five_min_reread(ticker: str | None, repo_root: Path) -> LensContext | N
 
 LENS = Lens(
     name="five_min_reread",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="ticker",
     prompt_template=_PROMPT_FIVE_MIN_REREAD,
     build_context=_ctx_five_min_reread,

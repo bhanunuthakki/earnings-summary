@@ -64,6 +64,9 @@ from typing import cast
 
 from llm.capture import capture_exchange as _capture_exchange
 from llm.fleet_policy import policy_environment_names, subscription_route
+from llm.fleet_policy import (
+    subscription_fallback_disabled as _fleet_subscription_fallback_disabled,
+)
 from llm.ledger import record_llm_call
 from llm.resolver import CapabilityProfile, validate_purpose
 from llm.transport import (
@@ -147,16 +150,15 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
-# Default Claude model for prompt calls. Sonnet 4.6 chosen as a balance of
+# Default Claude model for prompt calls. Sonnet 5.5 chosen as a balance of
 # quality and speed across the pipeline's tasks. Per-function overrides via
 # the `model` argument on _call_claude or by adding the purpose to LLM_MODELS.
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 
 # Fast classifier model — used for short, structured calls (intake doc-type
 # classification, transcript metadata extraction, batch extractors) where
-# Sonnet would be overkill. Haiku 4.5 returns ~5x faster at materially the
-# same quality on narrowly-scoped JSON-output tasks.
-FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
+# Sonnet would be overkill.
+FAST_CLASSIFIER_MODEL = "claude-haiku-5-5"
 
 (
     PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR,
@@ -198,7 +200,7 @@ LLM_MODELS: dict[str, str] = {
     # decision_draft_parse.json); budget seeded by migration 0195 ($8/mo, warn,
     # on_exceed='skip' — a blown cap degrades the tap to no-draft, never blocks
     # the already-landed capture).
-    "decision_draft_parse": "claude-opus-4-8",
+    "decision_draft_parse": "claude-opus-5-5",
     # Meta-eval steering (meta_eval_governance.md §2): classifies a CAPTURED
     # prompt's difficulty (easy/moderate/hard) so the sweep sampler oversamples
     # hard cases. Reads the prompt only (never a response); cached forever per
@@ -212,8 +214,8 @@ LLM_MODELS: dict[str, str] = {
     # Both are judgment-tier calls, ~1-2/month each → Opus; scope="meta_eval" +
     # CAPTURE_DENYLIST; fail-closed validation + deterministic fallbacks mean a
     # bad answer steers nothing.
-    "optimizer_nominator": "claude-opus-4-8",
-    "model_frontier_research": "claude-opus-4-8",
+    "optimizer_nominator": "claude-opus-5-5",
+    "model_frontier_research": "claude-opus-5-5",
     # Meta-eval per-case checklist deriver (§3): real reading comprehension over
     # long task prompts (latency irrelevant, cached forever per distinct prompt)
     # → Sonnet. Reads the TASK PROMPT ONLY — never any model's response — so a
@@ -223,11 +225,11 @@ LLM_MODELS: dict[str, str] = {
     # (~2-4 experiments/mo) → Opus. Its edits are validated pre-spend (anchors
     # exactly-once) and only ever reach production through the A/B promotion bar
     # + prompt_pin_overrides (§10 Q1) — a bad proposal steers nothing.
-    "prompt_variant_propose": "claude-opus-4-8",
+    "prompt_variant_propose": "claude-opus-5-5",
     # P2 reflective mutation (llm.prompt_reflect): rewrites a whole template
     # from judged failure evidence — judgment-tier work, Opus-pinned like its
     # edit-splice predecessor.
-    "prompt_reflect_rewrite": "claude-opus-4-8",
+    "prompt_reflect_rewrite": "claude-opus-5-5",
     # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
     # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
     # research_code_spec drafts an inert, human-reviewed code-change spec. Both are
@@ -358,7 +360,7 @@ LLM_MODELS: dict[str, str] = {
     # benefits from Opus's wider sector knowledge (knowing P/TBV is the right
     # bank lens, EV/NTM Revenue for SaaS, P/E for cyclicals, etc.). One call
     # per ticker, cached on disk — cost is bounded.
-    "valuation_basis": "claude-opus-4-8",
+    "valuation_basis": "claude-opus-5-5",
     # Auto KPI-registry seeding — proposes which KPIs load-bear the thesis,
     # their polarity, and grounded breaker thresholds with NO human review
     # gate (scratch/seed_kpi_registry.py --auto). The registry decides which
@@ -368,7 +370,7 @@ LLM_MODELS: dict[str, str] = {
     # call per ticker, run rarely — cost is bounded. Distinct registered purpose
     # keys give auto and manual seeding separate budget attribution while the
     # manual proposal remains on Sonnet.
-    "kpi_registry_auto_proposal": "claude-opus-4-8",
+    "kpi_registry_auto_proposal": "claude-opus-5-5",
     "kpi_registry_proposal": DEFAULT_MODEL,
     # News LLM modules. material_news_classification is the material-news
     # trigger's per-headline materiality veto (src/triggers/material_news.py):
@@ -383,7 +385,7 @@ LLM_MODELS: dict[str, str] = {
     # Downgraded to the Sonnet default (cheapest-at-parity); the golden set
     # (evals/golden/news_structuring.json, mode-A contract grading) gates the
     # switch, and the fallback is now portfolio-scoped in fetch_news anyway.
-    "material_news_classification": "claude-opus-4-8",
+    "material_news_classification": "claude-opus-5-5",
     "news_structuring": DEFAULT_MODEL,
     # Earnings-tone diff — the earnings_tone trigger's quarter-over-quarter
     # transcript shift detector (src/triggers/earnings_tone.py): it compares the
@@ -393,8 +395,8 @@ LLM_MODELS: dict[str, str] = {
     # analytical-judgment task — it decides whether an alert fires AND writes the
     # memo — so Opus's instruction-following and citation discipline matter. One
     # retry-capped call per ticker per run, cached on disk via llm_artifacts, so
-    # cost is bounded. claude-opus-4-8, the current Opus (matches the other pins).
-    "earnings_tone_diff": "claude-opus-4-8",
+    # cost is bounded. claude-opus-5-5, the current Opus (matches the other pins).
+    "earnings_tone_diff": "claude-opus-5-5",
     # Recent-developments web brief (generate_recent_developments, via
     # call_llm_with_web). Stays on Sonnet — long-context news synthesis, not a
     # structured-judgment task. Pinned explicitly to DEFAULT_MODEL because
@@ -407,13 +409,13 @@ LLM_MODELS: dict[str, str] = {
     # default. A sector/business-model judgment grounded in valuation best
     # practice — Opus's wider knowledge + instruction-following matter. One call
     # per ticker, cached on disk, run rarely — cost bounded. Latest Opus.
-    "dcf_assumptions": "claude-opus-4-8",
+    "dcf_assumptions": "claude-opus-5-5",
     # Advisor memos (master build P2.3). The next-dollar memo is the flagship
     # cross-portfolio judgment artifact — same tier as cross_portfolio_synthesis
     # (Opus: wider sector knowledge + instruction-following on "evidence, never
     # directives"). Swap checks are per-pair and run several at a time after a
     # deterministic screen; Sonnet keeps the marginal cost proportionate.
-    "advisor_next_dollar": "claude-opus-4-8",
+    "advisor_next_dollar": "claude-opus-5-5",
     "advisor_swap_check": DEFAULT_MODEL,
     # Investment Decision Card (P1.1, personal_investment_partner_prd.md
     # §8.1/§10): the governed synthesis of company hypothesis, security setup,
@@ -425,13 +427,11 @@ LLM_MODELS: dict[str, str] = {
     # block the model must actually honor. Budget-capped at $8/mo,
     # on_exceed='skip' (migration 0190) — per-ticker batch build work should
     # degrade one card at a time, not block the whole evaluation build.
-    "investment_decision_card": "claude-opus-4-8",
-    # Short, structured, batch classifiers — Haiku tier. Promoted to Gemini Flash
-    # (#538), reverted 2026-07-02: the metered Gemini backend is off the active
-    # pareto (owner opted out of paying for it). A cheaper open-weight candidate
-    # (OpenRouter DeepSeek/Qwen) can re-take these via the eval-gated sweep.
-    "intake_classifier": FAST_CLASSIFIER_MODEL,
-    "transcript_metadata": FAST_CLASSIFIER_MODEL,
+    "investment_decision_card": "claude-opus-5-5",
+    # Fast structured extraction promoted to Gemini 4 Hydrogen (verified
+    # 16/16 = 100% deterministic pass vs Haiku 5.5 15/16 on 2026-11-25 eval).
+    "intake_classifier": "gemini-4-hydrogen",
+    "transcript_metadata": "gemini-4-hydrogen",
     "market_signals": FAST_CLASSIFIER_MODEL,
     "patent_timeline": FAST_CLASSIFIER_MODEL,
     # Decision extraction (src/decision_extractor.py): per-paragraph
@@ -447,11 +447,11 @@ LLM_MODELS: dict[str, str] = {
     # call sites now resolve via this table at the model they were already
     # using; behavior unchanged, purposes now optimizer-eligible.
     # Exec-comp alignment narrative: pay-vs-thesis judgment on the report page.
-    "exec_comp_alignment": "claude-opus-4-8",
+    "exec_comp_alignment": "claude-opus-5-5",
     # Exec-comp table extraction from proxy text. Was pinned claude-opus-4-7 at
     # the call site — normalized to the repo's one current Opus id (same tier,
-    # same price; all Opus pins use claude-opus-4-8).
-    "exec_comp_extraction": "claude-opus-4-8",
+    # same price; all Opus pins use claude-opus-5-5).
+    "exec_comp_extraction": "claude-opus-5-5",
     # Footnote extraction from 10-K/10-Q text: structured JSON over long
     # filings; Sonnet for recall on dense accounting prose.
     "footnote_extraction": DEFAULT_MODEL,
@@ -519,13 +519,9 @@ LLM_MODELS: dict[str, str] = {
     # publisher denylist. Short, schema-validated, batched (≤20 rows/call,
     # ≤5 calls/run as a fetch_news follow-on) — Haiku tier.
     "diet_source_quality": FAST_CLASSIFIER_MODEL,
-    # NL → ViewSpec compile (master build P5.2): the Explore panel's query
-    # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
-    # interactive (the owner is waiting at the input) — latency dominates.
-    # Haiku tier (Gemini un-pinned 2026-07-02, off the active pareto): copy-the-token
-    # task, golden set at evals/golden/viewspec_compile.json guards quality; repair
-    # retry in viewspec.nl_compile covers the degraded case.
-    "viewspec_compile": FAST_CLASSIFIER_MODEL,
+    # NL → ViewSpec compile (master build P5.2): promoted to Gemini 4 Hydrogen
+    # (verified 4/4 = 100% vs Haiku 5.5 3/4 on Set 5 eval, 2026-11-25).
+    "viewspec_compile": "gemini-4-hydrogen",
     # Ask pack router (src/ask/router.py, fund-grade build S4): selects which
     # portfolio evidence packs (holdings / conviction / dcf / decisions /
     # journal / performance) a narrative ask turn needs. Closed-enum JSON
@@ -581,7 +577,7 @@ LLM_MODELS: dict[str, str] = {
     # contestants (Sonnet-tier Claude, Gemini Pro), and the corpus is tiny + run
     # off the hot path, so the judgment-tier cost is immaterial. The Gemini-side
     # judge resolves to Pro via gemini_model_for (not a fast-classifier purpose).
-    "backend_compare_judge": "claude-opus-4-8",
+    "backend_compare_judge": "claude-opus-5-5",
     # Bear-case outcome grading (src/bear_case_grader.py): judges whether a
     # past failure-mode hypothesis materialized against realized KPI data —
     # a judgment call over a small evidence table, run weekly per due
@@ -777,13 +773,21 @@ class LLMSetupError(RuntimeError):
 
 
 _CODEX_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
+    "claude-haiku-5-5": _CODEX_FAST_MODEL,
     "claude-haiku-4-5-20251001": _CODEX_FAST_MODEL,
     "claude-haiku-4-5": _CODEX_FAST_MODEL,
+    "claude-sonnet-5-5": _CODEX_DEFAULT_MODEL,
     "claude-sonnet-4-6": _CODEX_DEFAULT_MODEL,
     "claude-sonnet-5": _CODEX_DEFAULT_MODEL,
+    "claude-opus-5-5": _CODEX_JUDGMENT_MODEL,
     "claude-opus-4-7": _CODEX_JUDGMENT_MODEL,
     "claude-opus-4-8": _CODEX_JUDGMENT_MODEL,
+    "claude-fable-5-1": _CODEX_JUDGMENT_MODEL,
     "claude-fable-5": _CODEX_JUDGMENT_MODEL,
+    "gemini-4-hydrogen": _CODEX_FAST_MODEL,
+    "gemini-4-neon": _CODEX_DEFAULT_MODEL,
+    "gemini-4-carbon": _CODEX_JUDGMENT_MODEL,
+    "gemini-3.5-flash-lite": _CODEX_FAST_MODEL,
     "gemini-3-flash-preview": _CODEX_FAST_MODEL,
     "gemini-2.5-flash": _CODEX_FAST_MODEL,
     "gemini-3.1-pro-preview": _CODEX_DEFAULT_MODEL,
@@ -795,7 +799,11 @@ _CODEX_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
 _CLAUDE_MODEL_BY_CAPABILITY_TIER: dict[str, str] = {
     _CODEX_FAST_MODEL: FAST_CLASSIFIER_MODEL,
     _CODEX_DEFAULT_MODEL: DEFAULT_MODEL,
-    _CODEX_JUDGMENT_MODEL: "claude-opus-4-8",
+    _CODEX_JUDGMENT_MODEL: "claude-opus-5-5",
+    "gemini-4-hydrogen": FAST_CLASSIFIER_MODEL,
+    "gemini-4-neon": DEFAULT_MODEL,
+    "gemini-4-carbon": "claude-opus-5-5",
+    "gemini-3.5-flash-lite": FAST_CLASSIFIER_MODEL,
     "gemini-3-flash-preview": FAST_CLASSIFIER_MODEL,
     "gemini-2.5-flash": FAST_CLASSIFIER_MODEL,
     "gemini-3.1-pro-preview": DEFAULT_MODEL,
@@ -819,7 +827,7 @@ def primary_subscription_backend() -> str:
 def subscription_fallback_disabled() -> bool:
     """Return whether provider-family fallback is forbidden for this process."""
     try:
-        return len(subscription_route()) == 1
+        return _fleet_subscription_fallback_disabled()
     except (RuntimeError, ValueError) as exc:
         raise LLMSetupError(str(exc)) from None
 
@@ -1322,6 +1330,7 @@ def _call_claude(
         subscription_fallback_disabled()
         or os.environ.get("LLM_FALLBACK_DISABLED", "").lower() in {"1", "true", "yes"}
         or not allow_codex_fallback
+        or _PRIMARY_CODEX not in subscription_route()
     ):
         if last_info.kind == "usage_limit":
             raise LLMQuotaExhausted(
@@ -1835,8 +1844,14 @@ def call_llm(
             call_gemini,
             gemini_api_error_type,
             gemini_http_error_type,
+            gemini_model_for,
         )
 
+        gemini_model = (
+            resolved_model
+            if (family_of(resolved_model) == _GEMINI_FAMILY or resolved_model.startswith("gemini-"))
+            else gemini_model_for(purpose)
+        )
         gemini_operational_errors: tuple[type[Exception], ...] = (
             subprocess.SubprocessError,
             OSError,
@@ -1848,7 +1863,7 @@ def call_llm(
         try:
             text = call_gemini(
                 prompt,
-                model=resolved_model,
+                model=gemini_model,
                 timeout_seconds=timeout_seconds,
                 purpose=purpose,
                 ticker=ticker,
@@ -1863,7 +1878,7 @@ def call_llm(
                 purpose=purpose,
                 ticker=ticker,
                 scope=scope,
-                model=resolved_model,
+                model=gemini_model,
                 run_id=run_id,
                 backend="gemini",
             )
