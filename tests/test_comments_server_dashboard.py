@@ -222,7 +222,8 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # -7: generated position review, distillation, and direct profile mutations.
     # +2 read-only earnings view-data JSON routes (the prep and readout peeks'
     # typed models).
-    assert len(rules) == 157
+    # +1 read-only N-quarter portfolio coverage matrix JSON endpoint.
+    assert len(rules) == 158
     assert not {
         "start_socratic_questions",
         "socratic_questions_result",
@@ -278,6 +279,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     assert not (Path(comments_server.__file__).parent / "get_company_say_do.py").exists()
     assert rules["operations_attention_action"] == ("/api/operations/attention/<action_name>")
     assert rules["portfolio_risk_matrix_api"] == "/api/portfolio/risk-matrix"
+    assert rules["portfolio_coverage_matrix_api"] == "/api/portfolio/coverage-matrix"
     assert rules["work_os_open_loops_api"] == "/api/work-os/open-loops"
     assert rules["positioning_simulate_api"] == "/api/positioning/simulate"
     assert rules["evaluation_dialogues_api"] == "/api/work-os/evaluation-dialogues"

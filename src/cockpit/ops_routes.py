@@ -51,6 +51,39 @@ def register_ops_routes(app: Flask, ctx: ServerContext) -> None:
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.route("/api/portfolio/coverage-matrix", methods=["GET"])
+    def portfolio_coverage_matrix_api():
+        """Read-only N-quarter company coverage matrix across docs, transcripts, commitments, and readouts."""
+        from compute.portfolio_coverage_matrix import (
+            CoverageListFilter,
+            build_portfolio_coverage_matrix,
+        )
+
+        raw_quarters = request.args.get("quarters", "8")
+        try:
+            quarters = int(raw_quarters)
+        except ValueError:
+            return client_error("quarters must be an integer between 1 and 20", 400)
+        if quarters < 1 or quarters > 20:
+            return client_error("quarters must be an integer between 1 and 20", 400)
+
+        raw_list = (request.args.get("list") or "portfolio").strip().lower()
+        if raw_list not in {"portfolio", "evaluation", "watchlist", "all"}:
+            return client_error("list must be one of portfolio, evaluation, watchlist, all", 400)
+        list_filter = cast(CoverageListFilter, raw_list)
+
+        raw_tickers = [t.strip().upper() for t in request.args.getlist("ticker") if t.strip()]
+        conn = get_operations_read_db()
+        matrix = build_portfolio_coverage_matrix(
+            conn,
+            quarters=quarters,
+            list_type=list_filter,
+            tickers=raw_tickers or None,
+        )
+        response = app.json.response(matrix.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.route("/api/positioning/simulate", methods=["POST", "OPTIONS"])
     def positioning_simulate_api():
         """Generation 3 pre-trade portfolio impact simulator."""
