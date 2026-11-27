@@ -188,6 +188,8 @@ def upgrade() -> None:
     ]
     if not fact_ids:
         return
+    if connection.exec_driver_sql("PRAGMA foreign_keys").scalar():
+        raise RuntimeError("quarantined KPI purge requires the standard Alembic connection")
 
     ctx_ids, ctx_ids_by_rev = _load_context_revisions(connection, fact_ids)
     _assert_no_retained_references(connection, fact_ids, ctx_ids)
@@ -224,17 +226,19 @@ def upgrade() -> None:
                     chunk,
                 )
 
+        # Delete quarantined kpi_facts BEFORE nulling retained children's supersedes_id so
+        # uq_kpi_facts_provenance (..., COALESCE(supersedes_id, 0)) does not collide with parent.
         for chunk in _chunks(fact_ids):
             ph = _placeholders(chunk)
             connection.exec_driver_sql(
-                f"UPDATE kpi_facts SET supersedes_id = NULL WHERE supersedes_id IN ({ph})",  # nosec B608 -- bound integer placeholder list
+                f"DELETE FROM kpi_facts WHERE id IN ({ph})",  # nosec B608 -- bound integer placeholder list
                 chunk,
             )
 
         for chunk in _chunks(fact_ids):
             ph = _placeholders(chunk)
             connection.exec_driver_sql(
-                f"DELETE FROM kpi_facts WHERE id IN ({ph})",  # nosec B608 -- bound integer placeholder list
+                f"UPDATE kpi_facts SET supersedes_id = NULL WHERE supersedes_id IN ({ph})",  # nosec B608 -- bound integer placeholder list
                 chunk,
             )
 
