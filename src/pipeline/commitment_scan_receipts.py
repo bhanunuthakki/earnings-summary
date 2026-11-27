@@ -19,6 +19,7 @@ from runtime.deterministic import canonical_json_ascii as _canonical_json
 from runtime.deterministic import sha256_text as _sha256
 from transcripts.acquisition_semantics import (
     TranscriptAcquisitionAuthorization,
+    is_canonical_issuer_transcript_path,
     validate_transcript_acquisition_authorization,
 )
 
@@ -548,7 +549,6 @@ def _acquisition_matches_transcript_coordinate(
     ).fetchone()
     if row is None:
         return False
-    match = _TRANSCRIPT_NAME.fullmatch(acquisition.canonical_document_path.stem)
     try:
         period_end = date.fromisoformat(str(row["period_end"])[:10])
         expected_period_end = fiscal_quarter_period_end(
@@ -558,17 +558,25 @@ def _acquisition_matches_transcript_coordinate(
         )
     except (TypeError, ValueError):
         return False
-    return bool(
+    if not (
         (acquisition.document_id is None or acquisition.document_id == binding.document_id)
         and acquisition.artifact_sha256 == binding.transcript_sha256
-        and acquisition.canonical_document_path.parent == PurePosixPath("transcripts/raw")
+        and str(row["ticker"]) == acquisition.canonical_ticker
+        and str(row["fiscal_period_type"]) == f"Q{acquisition.fiscal_quarter}"
+        and period_end == expected_period_end
+    ):
+        return False
+    if acquisition.document_id is not None and is_canonical_issuer_transcript_path(
+        acquisition.canonical_document_path, acquisition.canonical_ticker
+    ):
+        return acquisition.document_id == binding.document_id
+    match = _TRANSCRIPT_NAME.fullmatch(acquisition.canonical_document_path.stem)
+    return bool(
+        acquisition.canonical_document_path.parent == PurePosixPath("transcripts/raw")
         and match is not None
         and match.group("ticker") == acquisition.canonical_ticker
         and int(match.group("year")) == acquisition.fiscal_year
         and int(match.group("quarter")) == acquisition.fiscal_quarter
-        and str(row["ticker"]) == acquisition.canonical_ticker
-        and str(row["fiscal_period_type"]) == f"Q{acquisition.fiscal_quarter}"
-        and period_end == expected_period_end
     )
 
 
@@ -639,15 +647,8 @@ def current_transcript_scan_binding(
         (transcript_id,),
     ).fetchall()
     for row in rows:
-        file_path = PurePosixPath(str(row["file_path"]))
+        file_path = PurePosixPath(str(row["file_path"]).replace("\\", "/"))
         transcript_sha256 = str(row["sha256"])
-        processed_parent = PurePosixPath("transcripts/processed")
-        evidence_parent = PurePosixPath("transcripts/raw/.evidence") / transcript_sha256
-        if file_path.parent not in {processed_parent, evidence_parent}:
-            continue
-        match = _TRANSCRIPT_NAME.fullmatch(file_path.stem)
-        if match is None:
-            continue
         binding = TranscriptScanBinding(
             transcript_id=int(row["transcript_id"]),
             document_id=int(row["document_id"]),
@@ -661,12 +662,30 @@ def current_transcript_scan_binding(
             conn, acquisition=acquisition, binding=binding
         ):
             continue
+        is_issuer_doc_path = is_canonical_issuer_transcript_path(
+            file_path, acquisition.canonical_ticker
+        )
+        if is_issuer_doc_path:
+            path_matches = (
+                acquisition.document_id == binding.document_id
+                and acquisition.canonical_document_path == file_path
+            )
+        else:
+            processed_parent = PurePosixPath("transcripts/processed")
+            raw_parent = PurePosixPath("transcripts/raw")
+            evidence_parent = PurePosixPath("transcripts/raw/.evidence") / transcript_sha256
+            match = _TRANSCRIPT_NAME.fullmatch(file_path.stem)
+            path_matches = (
+                file_path.parent in {processed_parent, raw_parent, evidence_parent}
+                and match is not None
+                and acquisition.canonical_document_path.name == file_path.name
+            )
         document_source_url = None if row["source_url"] is None else str(row["source_url"])
         source_metadata_matches = (
             str(row["source_type"]) == "ir_doc" and acquisition.source_url == document_source_url
         ) or (str(row["source_type"]) == "transcript_audio" and document_source_url is None)
         if (
-            acquisition.canonical_document_path.name != file_path.name
+            not path_matches
             or acquisition.artifact_size_bytes != int(row["raw_bytes_size"])
             or not source_metadata_matches
         ):

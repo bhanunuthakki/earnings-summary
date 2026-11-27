@@ -69,10 +69,13 @@ def _safe_path(repo_root: Path, recorded: str) -> Path | None:
     if candidate.is_absolute() or ".." in candidate.parts:
         return None
     parts = candidate.parts
-    if len(parts) < 3 or parts[0] != "transcripts" or parts[1] not in {"raw", "processed"}:
+    if len(parts) >= 3 and parts[0] == "transcripts" and parts[1] in {"raw", "processed"}:
+        intended = (repo_root.resolve() / parts[0] / parts[1]).resolve()
+    elif len(parts) >= 3 and parts[0] == "ir_documents":
+        intended = (repo_root.resolve() / parts[0]).resolve()
+    else:
         return None
     root = repo_root.resolve()
-    intended = (root / parts[0] / parts[1]).resolve()
     lexical = root / candidate
     current = lexical
     while True:

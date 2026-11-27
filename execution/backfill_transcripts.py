@@ -401,7 +401,7 @@ def _ingested_evidence(
                 "JOIN documents AS d ON d.id=t.document_id "
                 "WHERE UPPER(d.ticker)=? AND UPPER(t.ticker)=? "
                 "AND t.fiscal_period_type=? AND date(t.period_end)=date(?) "
-                "AND t.is_current=1 AND d.file_path=? "
+                "AND t.is_current=1 "
                 "AND EXISTS ("
                 "SELECT 1 FROM transcript_segments AS s WHERE s.transcript_id=t.id"
                 ") ORDER BY d.id DESC,t.id DESC",
@@ -410,7 +410,6 @@ def _ingested_evidence(
                     ticker.upper(),
                     f"Q{quarter}",
                     period_end,
-                    f"transcripts/processed/{ticker.upper()}_Q{quarter}_{year}.txt",
                 ),
             ).fetchall()
             bindings = {

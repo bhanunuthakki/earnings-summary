@@ -49,6 +49,7 @@ from models.documents import SourceQualityTier, SourceType
 from models.facts import Currency, DerivedInputRef, DerivedRef, Unit
 from pipeline import locators
 from pipeline.confidence import score_confidence
+from pipeline.kpi_atomic_admission import build_atomic_semantic_context
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
@@ -1146,6 +1147,22 @@ def persist_attempt(
             formula_id=formula_id,
             formula_version=formula.version,
         )
+        if new_id is not None:
+            persist_kpi_semantic_context(
+                conn,
+                kpi_fact_id=new_id,
+                context=build_atomic_semantic_context(
+                    metric_name=formula.formula_key,
+                    period_end=period_end.date(),
+                    value=result.value,
+                    unit=formula.unit,
+                    extracted_by="metrics_engine",
+                    locator=derived_loc,
+                ),
+                reviewed_by="deterministic:metrics_engine",
+                knowledge_at=datetime.now(UTC),
+                kpi_definition_revision_id=None,
+            )
         kpi_fact_id = new_id
     else:
         status = "not_computable"

@@ -1622,7 +1622,7 @@ def test_later_segment_budget_or_setup_hard_stop_propagates_without_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = migrated_db(tmp_path / f"hard-stop-{type(hard_stop).__name__}.db")
-    transcript_id, _ = _seed_transcript(path, segments=["first", "second"])
+    transcript_id, _ = _seed_transcript(path, segments=["a" * 35_000, "b" * 35_000])
     module = _load_script()
     calls = 0
 
