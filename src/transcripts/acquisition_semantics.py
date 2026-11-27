@@ -61,7 +61,7 @@ TRANSCRIPT_ACQUISITION_POLICY_VERSION = POLICY_VERSION
 TranscriptSourcePolicyVersion = Literal["2026-08-12.2", "2026-09-19.1"]
 _MAX_REPORTED_QUARTERS = 5
 _CANONICAL_TRANSCRIPT_STEM_RE = re.compile(
-    r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})$"
+    r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})(?:__(?P<digest>[0-9a-f]{8}))?$"
 )
 
 
@@ -114,6 +114,14 @@ def is_canonical_transcript_file_path(
         return True
     parsed = parse_canonical_transcript_filename(path)
     if parsed is None:
+        return False
+    stem_match = _CANONICAL_TRANSCRIPT_STEM_RE.fullmatch(path.stem)
+    if (
+        sha256 is not None
+        and stem_match is not None
+        and stem_match.group("digest") is not None
+        and stem_match.group("digest") != sha256[:8]
+    ):
         return False
     file_ticker, file_year, file_quarter = parsed
     if file_ticker != ticker_upper:

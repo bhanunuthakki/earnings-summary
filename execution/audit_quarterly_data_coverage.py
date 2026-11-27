@@ -586,11 +586,19 @@ def _transcript_evidence(
     transcript = transcripts[0]
     transcript_id = int(transcript["transcript_id"])
     document_id = int(transcript["document_id"])
-    expected_processed = f"transcripts/processed/{ticker}_Q{fiscal_quarter}_{fiscal_year}.txt"
-    expected_raw = f"transcripts/raw/{ticker}_Q{fiscal_quarter}_{fiscal_year}.txt"
     recorded_path = str(transcript["file_path"])
     recorded_sha = str(transcript["sha256"])
-    if recorded_path != expected_processed:
+    base_stem = f"{ticker}_Q{fiscal_quarter}_{fiscal_year}"
+    suffixed_stem = f"{base_stem}__{recorded_sha[:8]}" if len(recorded_sha) >= 8 else base_stem
+    expected_processed_paths = (
+        f"transcripts/processed/{base_stem}.txt",
+        f"transcripts/processed/{suffixed_stem}.txt",
+    )
+    expected_raw_paths = (
+        f"transcripts/raw/{base_stem}.txt",
+        f"transcripts/raw/{suffixed_stem}.txt",
+    )
+    if recorded_path not in expected_processed_paths:
         reasons.append("processed_path_mismatch")
     snapshot = snapshot_recorded_evidence(repo_root, recorded_path)
     if snapshot is None:
@@ -612,7 +620,7 @@ def _transcript_evidence(
         "AND provider IN ('issuer_ir','roic','stockanalysis','tickertrends','google_finance_beta') "
         "AND source_type='ir_doc' "
         "AND document_type='earnings_call_transcript' "
-        "AND canonical_document_path=? AND datetime(recorded_at)<=datetime(?) "
+        "AND canonical_document_path IN (?,?) AND datetime(recorded_at)<=datetime(?) "
         "ORDER BY datetime(recorded_at) DESC,receipt_id DESC",
         (
             ticker,
@@ -620,7 +628,8 @@ def _transcript_evidence(
             fiscal_quarter,
             recorded_sha,
             document_id,
-            expected_raw,
+            expected_raw_paths[0],
+            expected_raw_paths[1],
             _iso_utc(cutoff_at),
         ),
     ).fetchall()

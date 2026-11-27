@@ -36,6 +36,7 @@ from compute.transcript_ingest import (
     ParsedFilename,
     find_existing_transcript_id,
     ingest_evidence_file,
+    lookup_fiscal_year_end,
     map_to_period,
     parse_transcript_filename,
 )
@@ -357,7 +358,7 @@ def _is_exactly_ingested_processed_candidate(
         return False
     snapshot = evidence_snapshot.capture_snapshot(path, processed_root)
     relative = path.relative_to(project_root).as_posix()
-    period = map_to_period(parsed)
+    period = map_to_period(parsed, fiscal_year_end=lookup_fiscal_year_end(conn, parsed.ticker))
     transcripts = selected_transcripts_relation(conn).sql
     row = conn.execute(
         "SELECT 1 FROM documents d "
@@ -970,7 +971,9 @@ def main() -> int:
                 parsed.ticker,
                 StageName.INGEST,
                 StageStatus.SKIPPED,
-                period_end=map_to_period(parsed).period_end,
+                period_end=map_to_period(
+                    parsed, fiscal_year_end=lookup_fiscal_year_end(conn, parsed.ticker)
+                ).period_end,
             )
 
         for path, parsed, error_class in staging_failures:
@@ -980,7 +983,9 @@ def main() -> int:
                 parsed.ticker,
                 StageName.INGEST,
                 StageStatus.FAILED,
-                period_end=map_to_period(parsed).period_end,
+                period_end=map_to_period(
+                    parsed, fiscal_year_end=lookup_fiscal_year_end(conn, parsed.ticker)
+                ).period_end,
                 error_msg=f"{path.name}: {error_class}",
             )
 
