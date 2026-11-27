@@ -73,6 +73,7 @@ class TranscriptProvider(StrEnum):
     ROIC = "roic"
     STOCKANALYSIS = "stockanalysis"
     TICKERTRENDS = "tickertrends"
+    GOOGLE_FINANCE_BETA = "google_finance_beta"
     YOUTUBE_AUDIO = "youtube_audio"
 
 
@@ -139,6 +140,7 @@ _PROVIDERS_BY_ENTRYPOINT = {
             TranscriptProvider.ROIC,
             TranscriptProvider.STOCKANALYSIS,
             TranscriptProvider.TICKERTRENDS,
+            TranscriptProvider.GOOGLE_FINANCE_BETA,
         }
     ),
     TranscriptAcquisitionEntrypoint.REFETCH_AGGREGATOR_TRANSCRIPTS: frozenset(
@@ -146,6 +148,7 @@ _PROVIDERS_BY_ENTRYPOINT = {
             TranscriptProvider.ROIC,
             TranscriptProvider.STOCKANALYSIS,
             TranscriptProvider.TICKERTRENDS,
+            TranscriptProvider.GOOGLE_FINANCE_BETA,
         }
     ),
     TranscriptAcquisitionEntrypoint.FETCH_AUDIO_TRANSCRIPTS: frozenset(
@@ -157,6 +160,7 @@ _PROVIDERS_BY_ENTRYPOINT = {
             TranscriptProvider.ROIC,
             TranscriptProvider.STOCKANALYSIS,
             TranscriptProvider.TICKERTRENDS,
+            TranscriptProvider.GOOGLE_FINANCE_BETA,
         }
     ),
 }
@@ -165,6 +169,7 @@ _SOURCE_TYPE_BY_PROVIDER: dict[TranscriptProvider, SourceType | None] = {
     TranscriptProvider.ROIC: SourceType.IR_DOC,
     TranscriptProvider.STOCKANALYSIS: SourceType.IR_DOC,
     TranscriptProvider.TICKERTRENDS: SourceType.IR_DOC,
+    TranscriptProvider.GOOGLE_FINANCE_BETA: SourceType.IR_DOC,
     TranscriptProvider.YOUTUBE_AUDIO: SourceType.TRANSCRIPT_AUDIO,
 }
 

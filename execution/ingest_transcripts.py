@@ -710,6 +710,7 @@ def main() -> int:
                     TranscriptProvider.ROIC,
                     TranscriptProvider.STOCKANALYSIS,
                     TranscriptProvider.TICKERTRENDS,
+                    TranscriptProvider.GOOGLE_FINANCE_BETA,
                 ):
                     request = TranscriptAcquisitionRequest(
                         schema_version="transcript-acquisition-request@2",

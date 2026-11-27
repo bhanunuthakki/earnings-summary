@@ -11,7 +11,7 @@ from compute.transcript_ingest import (
     ParsedFilename,
     QASectionStatus,
     SpeakerTurn,
-    _infer_fiscal_period_type,
+    _infer_fiscal_period_type,  # pyright: ignore[reportPrivateUsage]
     detect_qa_section,
     map_to_period,
     parse_transcript_filename,
@@ -202,8 +202,9 @@ def test_known_speakers_for_returns_none_for_unknown_ticker() -> None:
     from compute.transcript_ingest import known_speakers_for
 
     assert known_speakers_for("MELI") is None
-    assert known_speakers_for("WIX") is not None
-    assert "Avishai Abrahami" in known_speakers_for("WIX")
+    wix_speakers = known_speakers_for("WIX")
+    assert wix_speakers is not None
+    assert "Avishai Abrahami" in wix_speakers
 
 
 # ---------------------------------------------------------------------------
@@ -300,3 +301,149 @@ def test_qa_status_to_db_value_round_trip() -> None:
     assert qa_status_to_db_value(QASectionStatus.PRESENT) is True
     assert qa_status_to_db_value(QASectionStatus.ABSENT) is False
     assert qa_status_to_db_value(QASectionStatus.UNKNOWN) is None
+
+
+# ---------------------------------------------------------------------------
+# Google Finance Beta / Quartr verbatim speaker & Q&A parsing
+# ---------------------------------------------------------------------------
+
+
+def test_segment_by_speaker_parses_google_finance_beta_comma_and_unicode_headers() -> None:
+    """Multi-comma titles, analyst firm headers, accented Latin names, and [Operator Instructions]."""
+    text = (
+        "[Operator Instructions]\n"
+        "Good day, and welcome to the conference call.\n"
+        "Jane Smith, Chief Financial Officer\n"
+        "1m 10s\n"
+        "Thank you, operator. Revenue grew 18%.\n"
+        "Alex Karp, Co-Founder, Chief Executive Officer\n"
+        "3m 05s\n"
+        "Demand continues to accelerate.\n"
+        "David Vélez, Founder, CEO, and Chairman, Nu\n"
+        "5m 12s\n"
+        "Customer deposits expanded across every market.\n"
+        "Hassane El-Khoury, President and CEO, onsemi\n"
+        "7m 00s\n"
+        "Automotive silicon carbide remains on plan.\n"
+        "Luis von Ahn, Co-Founder and CEO, Duolingo\n"
+        "9m 20s\n"
+        "Daily active users grew 50%.\n"
+        "C.C. Wei, Chairman and CEO, Taiwan Semiconductor Manufacturing Company\n"
+        "11m 00s\n"
+        "AI demand remains strong.\n"
+        "[Operator Instructions]\n"
+        "14m 10s\n"
+        "Our first question comes from Brian Nowak with Morgan Stanley.\n"
+        "Brian Nowak, Analyst, Morgan Stanley\n"
+        "14m 25s\n"
+        "Thanks for taking my question.\n"
+        "Mark Mahaney, Analyst, Evercore ISI\n"
+        "16m 00s\n"
+        "Could you comment on margins?\n"
+        "Étienne Ricard, Analyst, BMO Capital Markets\n"
+        "18m 05s\n"
+        "Where do you see the best capital allocation returns?\n"
+        "Søren Hansen, Analyst, Nordic Partners Co.\n"
+        "20m 10s\n"
+        "Any update on European demand?\n"
+        "François Moreau, Analyst, Société Générale\n"
+        "22m 00s\n"
+        "Thank you for taking my follow-up.\n"
+    )
+    turns = segment_by_speaker(text)
+    speakers = [t.speaker for t in turns]
+    assert speakers == [
+        "Operator",
+        "Jane Smith",
+        "Alex Karp",
+        "David Vélez",
+        "Hassane El-Khoury",
+        "Luis von Ahn",
+        "C.C. Wei",
+        "Operator",
+        "Brian Nowak",
+        "Mark Mahaney",
+        "Étienne Ricard",
+        "Søren Hansen",
+        "François Moreau",
+    ]
+    ricard_turn = next(t for t in turns if t.speaker == "Étienne Ricard")
+    assert "capital allocation returns" in ricard_turn.text
+    assert "BMO Capital Markets" not in ricard_turn.text
+
+
+def test_segment_by_speaker_does_not_split_ordinary_prose_with_commas() -> None:
+    """Prose lines with commas, greetings, or sentence-ending periods must stay inside the turn."""
+    text = (
+        "Nick Goodman, President, Brookfield\n"
+        "12m 5s\n"
+        "Thank you, Bruce, and good morning, everyone.\n"
+        "John Doe, thanks for the follow-up.\n"
+        "Paul Brink, President and CEO of Franco-Nevada.\n"
+        "Brian, do you want me to start here, and then you can add on?\n"
+        "I will turn it over after [Operator Instructions] finishes.\n"
+        "John Doe, Analyst, Morgan Stanley\n"
+        "28m 41s\n"
+        "Thanks for taking my question.\n"
+    )
+    turns = segment_by_speaker(text)
+    speakers = [t.speaker for t in turns]
+    assert speakers == ["Nick Goodman", "John Doe"]
+    assert "Paul Brink, President and CEO of Franco-Nevada." in turns[0].text
+    assert "Brian, do you want me to start here" in turns[0].text
+    assert "[Operator Instructions]" in turns[0].text
+
+
+def test_detect_qa_section_google_finance_beta_analyst_headers() -> None:
+    """Google Finance Beta `<Name>, Analyst, <Bank>` headers trigger PRESENT without operator intros."""
+    text = _padded(
+        "[Operator Instructions]\n"
+        "Good morning, and welcome to the conference call.\n"
+        "Bruce Flatt, CEO, Brookfield\n"
+        "2m 16s\n"
+        "We had a strong third quarter.\n"
+        "Étienne Ricard, Analyst, BMO Capital Markets\n"
+        "48m 5s\n"
+        "In terms of capital allocation, where do you see the best return opportunities?\n"
+        "Nick Goodman, President, Brookfield\n"
+        "48m 33s\n"
+        "Hi, Étienne. We see strong opportunities across both franchises.\n"
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.PRESENT
+    assert "analyst_speaker_header" in result.signals
+
+
+def test_detect_qa_section_senior_analyst_title_variant() -> None:
+    """Extended analyst titles like `Senior Analyst of ...` also trigger PRESENT."""
+    text = _padded(
+        "Dave Ricks, Chair and CEO, Eli Lilly and Company\n"
+        "2m 00s\n"
+        "Prepared remarks.\n"
+        "Chris Schott, Senior Analyst of US Diversified Biopharma, JPMorgan\n"
+        "26m 10s\n"
+        "Thanks for taking my question.\n"
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.PRESENT
+    assert "analyst_speaker_header" in result.signals
+
+
+def test_detect_qa_section_google_finance_beta_prepared_remarks_only_is_absent() -> None:
+    """Prepared-remarks-only transcript with Quartr executive headers must remain ABSENT."""
+    text = _padded(
+        "[Operator Instructions]\n"
+        "After the speaker presentation, there will be a question-and-answer session.\n"
+        "Katie Battaglia, VP of Investor Relations, Brookfield\n"
+        "36s\n"
+        "After our formal comments, we will turn the call over to the operator and take analyst questions.\n"
+        "Bruce Flatt, CEO, Brookfield\n"
+        "2m 16s\n"
+        "We had a strong quarter with 16% distributable earnings growth.\n"
+        "Jon Bayer, Managing Partner and COO, Brookfield Wealth Solutions\n"
+        "21m 53s\n"
+        "Thank you. With that, I will hand the call over to the operator for questions.\n"
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.ABSENT
+    assert result.signals == ()

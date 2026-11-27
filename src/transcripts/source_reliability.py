@@ -28,10 +28,14 @@ Ranking is grounded in concrete evidence, not guesswork:
   - `fetch_audio_transcripts.py`'s curated-URL/manifest modes are a verified
     link chosen in advance; smart-search auto-selects and scores a YouTube
     candidate, which is inherently less certain to be the right video.
-  - Every aggregator source is Q&A-only by design (directives/
+  - Google Finance Beta (Quartr-backed) provides full-call verbatim transcripts
+    (prepared remarks + Q&A) with per-turn speaker, title, and firm attribution.
+    It outranks Whisper audio transcripts and Q&A-only aggregators, while
+    ranking below official issuer IR documents and manual PDF drops.
+  - Every other aggregator source is Q&A-only by design (directives/
     fetch_qa_transcript.md, "Why Q&A only") — structurally less complete
-    than a full-call transcript (manual/IR PDF, Whisper audio), regardless
-    of parse fidelity.
+    than a full-call transcript (manual/IR PDF, Google Finance Beta, Whisper
+    audio), regardless of parse fidelity.
 """
 
 from __future__ import annotations
@@ -51,6 +55,11 @@ UNKNOWN_LEGACY = "unknown_legacy"
 _RANK: dict[str, int] = {
     IR_TRANSCRIPT_DOC: 100,
     MANUAL_PDF: 90,
+    # Google Finance Beta (Quartr-backed) full-call verbatim transcripts carry
+    # both prepared remarks and speaker-attributed Q&A; accept both the index
+    # source label (`aggregator_google_finance_beta`) and raw provider token.
+    "aggregator_google_finance_beta": 80,
+    "google_finance_beta": 80,
     "yt_dlp_whisper_url": 70,
     "yt_dlp_whisper_links": 70,
     "yt_dlp_whisper_search": 60,

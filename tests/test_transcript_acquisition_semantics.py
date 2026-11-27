@@ -308,6 +308,49 @@ def test_aggregator_is_admitted_under_ir_doc_but_cannot_use_wrong_source_type() 
     assert validate_transcript_acquisition_authorization(denied) == denied
 
 
+def test_google_finance_beta_provider_grants_and_denials() -> None:
+    for entrypoint in (
+        TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+        TranscriptAcquisitionEntrypoint.REFETCH_AGGREGATOR_TRANSCRIPTS,
+        TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
+    ):
+        allowed_request = _request(
+            entrypoint=entrypoint,
+            source_type=SourceType.IR_DOC,
+            document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+            provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+        )
+        allowed = _authorization(allowed_request)
+        assert validate_transcript_acquisition_authorization(allowed) == allowed
+
+    wrong_source_request = _request(
+        source_type=SourceType.FMP,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+    )
+    wrong_source = _authorization(
+        wrong_source_request,
+        status=TranscriptAuthorizationStatus.DENIED,
+        reason=TranscriptAuthorizationReason.PROVIDER_SOURCE_MISMATCH,
+        failure=TranscriptAuthorizationFailure.SOURCE_DOCUMENT_CLASS,
+    )
+    assert validate_transcript_acquisition_authorization(wrong_source) == wrong_source
+
+    wrong_entrypoint_request = _request(
+        entrypoint=TranscriptAcquisitionEntrypoint.QUARTERLY_REFRESH,
+        source_type=SourceType.IR_DOC,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+    )
+    wrong_entrypoint = _authorization(
+        wrong_entrypoint_request,
+        status=TranscriptAuthorizationStatus.DENIED,
+        reason=TranscriptAuthorizationReason.ENTRYPOINT_PROVIDER_MISMATCH,
+        failure=TranscriptAuthorizationFailure.ENTRYPOINT_PROVIDER_GRANT,
+    )
+    assert validate_transcript_acquisition_authorization(wrong_entrypoint) == wrong_entrypoint
+
+
 def test_provider_source_document_and_entrypoint_grants_are_exact() -> None:
     request = _request(
         entrypoint=TranscriptAcquisitionEntrypoint.REFETCH_AGGREGATOR_TRANSCRIPTS,

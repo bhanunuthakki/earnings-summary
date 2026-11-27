@@ -609,7 +609,7 @@ def _transcript_evidence(
         "FROM transcript_acquisition_receipts WHERE canonical_ticker=? "
         "AND fiscal_year=? AND fiscal_quarter=? AND artifact_sha256=? "
         "AND (document_id IS NULL OR document_id=?) "
-        "AND provider IN ('issuer_ir','roic','stockanalysis','tickertrends') "
+        "AND provider IN ('issuer_ir','roic','stockanalysis','tickertrends','google_finance_beta') "
         "AND source_type='ir_doc' "
         "AND document_type='earnings_call_transcript' "
         "AND canonical_document_path=? AND datetime(recorded_at)<=datetime(?) "
