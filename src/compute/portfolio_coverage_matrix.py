@@ -25,6 +25,11 @@ _DECK_DOC_TYPES = (
     "ir_supplement",
     "ir_investor_update",
 )
+_ALL_MATRIX_DOC_TYPES = (
+    *_FILING_DOC_TYPES,
+    *_PRESS_RELEASE_DOC_TYPES,
+    *_DECK_DOC_TYPES,
+)
 
 
 class QuarterCoverageCell(BaseModel):
@@ -137,12 +142,27 @@ def _build_quarter_schedule(
     if not observed_dates:
         return ()
     fye_month, fye_day = _parse_fye(fye_raw)
-    latest = max(observed_dates)
+    aligned = [d for d in observed_dates if (d.month - fye_month) % 3 == 0]
+    anchor_candidates = aligned or list(observed_dates)
+    latest = max(anchor_candidates)
     if (latest.month - fye_month) % 3 == 0:
         anchor = _quarter_end_for_month(latest.year, latest.month, fye_day)
         return tuple(_shift_quarter_end(anchor, i, fye_day) for i in range(quarters))
     unique_desc = sorted(set(observed_dates), reverse=True)
     return tuple(unique_desc[:quarters])
+
+
+def _record_anchor_date(
+    observed_dates_by_ticker: dict[str, set[date]],
+    fallback_dates_by_ticker: dict[str, set[date]],
+    ticker: str,
+    period_end_str: str,
+    as_of_date: date,
+) -> None:
+    parsed = date.fromisoformat(period_end_str)
+    fallback_dates_by_ticker[ticker].add(parsed)
+    if parsed <= as_of_date:
+        observed_dates_by_ticker[ticker].add(parsed)
 
 
 def _load_companies(
@@ -199,20 +219,26 @@ def build_portfolio_coverage_matrix(
             rows=(),
         )
 
+    today_utc = datetime.now(UTC).date()
     placeholders = ",".join("?" for _ in ticker_set)
+    doc_type_placeholders = ",".join("?" for _ in _ALL_MATRIX_DOC_TYPES)
     doc_types_by_key: dict[tuple[str, str], set[str]] = {}
     observed_dates_by_ticker: dict[str, set[date]] = {t: set() for t in ticker_set}
+    fallback_dates_by_ticker: dict[str, set[date]] = {t: set() for t in ticker_set}
 
     if _table_exists(conn, "documents"):
         for r in conn.execute(
-            f"SELECT UPPER(ticker), date(period_end), doc_type "  # nosec B608 -- bounded IN placeholder count from tracked_companies
+            f"SELECT UPPER(ticker), date(period_end), doc_type "  # nosec B608 -- bounded IN placeholder count from tracked_companies and static doc-type list
             f"FROM documents WHERE UPPER(ticker) IN ({placeholders}) "
+            f"AND doc_type IN ({doc_type_placeholders}) "
             "AND period_end IS NOT NULL AND date(period_end) IS NOT NULL",
-            ticker_set,
+            (*ticker_set, *_ALL_MATRIX_DOC_TYPES),
         ).fetchall():
             t, pe_s, dt = str(r[0]), str(r[1]), str(r[2] or "")
             doc_types_by_key.setdefault((t, pe_s), set()).add(dt)
-            observed_dates_by_ticker[t].add(date.fromisoformat(pe_s))
+            _record_anchor_date(
+                observed_dates_by_ticker, fallback_dates_by_ticker, t, pe_s, today_utc
+            )
 
     obs_periods: set[tuple[str, str]] = set()
     if _table_exists(conn, "reported_observations"):
@@ -224,7 +250,6 @@ def build_portfolio_coverage_matrix(
         ).fetchall():
             t, pe_s = str(r[0]), str(r[1])
             obs_periods.add((t, pe_s))
-            observed_dates_by_ticker[t].add(date.fromisoformat(pe_s))
 
     tx_by_key: dict[tuple[str, str], tuple[int, str | None, bool]] = {}
     if _table_exists(conn, "transcripts"):
@@ -248,7 +273,9 @@ def build_portfolio_coverage_matrix(
                     str(r[3]) if r[3] is not None else None,
                     bool(r[4]),
                 )
-            observed_dates_by_ticker[t].add(date.fromisoformat(pe_s))
+            _record_anchor_date(
+                observed_dates_by_ticker, fallback_dates_by_ticker, t, pe_s, today_utc
+            )
 
     tx_ids = sorted({val[0] for val in tx_by_key.values()})
     commitments_by_tx: dict[int, int] = {}
@@ -289,6 +316,13 @@ def build_portfolio_coverage_matrix(
             key = (str(r[0]), str(r[1]))
             if key not in readout_by_key:
                 readout_by_key[key] = "dirty" if bool(r[2]) else "ok"
+            _record_anchor_date(
+                observed_dates_by_ticker,
+                fallback_dates_by_ticker,
+                key[0],
+                key[1],
+                today_utc,
+            )
 
     latest_brief_by_ticker: dict[str, str] = {}
     if _table_exists(conn, "brief_provenance_log"):
@@ -312,7 +346,9 @@ def build_portfolio_coverage_matrix(
     for ticker, name, role, fye in companies:
         fye_month, _ = _parse_fye(fye)
         schedule = _build_quarter_schedule(
-            sorted(observed_dates_by_ticker.get(ticker, ())),
+            sorted(
+                observed_dates_by_ticker.get(ticker) or fallback_dates_by_ticker.get(ticker, ())
+            ),
             fye_raw=fye,
             quarters=quarters,
         )
