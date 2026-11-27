@@ -48,7 +48,12 @@ from llm.model_eval import (  # noqa: E402
     judge_case,
     run_model,
 )
-from llm.model_ladder import cheaper_candidates, estimated_call_usd, model_cost  # noqa: E402
+from llm.model_ladder import (  # noqa: E402
+    JUDGE_POOL,
+    cheaper_candidates,
+    estimated_call_usd,
+    model_cost,
+)
 
 log = logging.getLogger("eval_model_downgrade")
 
@@ -94,10 +99,10 @@ def _load_cases(capture_path: Path, purpose: str, limit: int | None) -> list[Pro
 
 
 def _judge_model_for(judge_backend: str) -> str | None:
-    # The judge purpose is pinned to Opus on the Claude side; Gemini side resolves
-    # to Pro. The driver lets backend_judge resolve it (judge_model is advisory
-    # metadata here), so we just label it.
-    return "claude-opus-4-8" if judge_backend == CLAUDE else "gemini-3.1-pro-preview"
+    # The judge purpose is pinned in JUDGE_POOL (Claude Opus / Gemini Neon).
+    # The driver lets backend_judge resolve it (judge_model is advisory
+    # metadata here), so we just label it from the registry.
+    return JUDGE_POOL.get(judge_backend)
 
 
 def _agreement(judged: list[tuple[str, JudgedPair]], judges: list[str]) -> float:

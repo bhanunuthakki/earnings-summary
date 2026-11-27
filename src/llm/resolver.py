@@ -117,7 +117,31 @@ MODEL_CAPABILITIES: dict[str, CapabilityProfile] = {
     "claude-fable-5": CapabilityProfile(
         min_context_length=200_000, requires_vision=True, requires_structured_output=True
     ),
+    # Claude 5.5 / Fable 5.1 (verified 2026-10-21: 1M context across lineup).
+    "claude-haiku-5-5": CapabilityProfile(
+        min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
+    ),
+    "claude-sonnet-5-5": CapabilityProfile(
+        min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
+    ),
+    "claude-opus-5-5": CapabilityProfile(
+        min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
+    ),
+    "claude-fable-5-1": CapabilityProfile(
+        min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
+    ),
     # Gemini models
+    # Gemini 4 capabilities verified against official model specs on 2026-11-25.
+    # Registry membership does not qualify or promote any purpose/model route.
+    "gemini-4-neon": CapabilityProfile(
+        min_context_length=1_048_576, requires_vision=True, requires_structured_output=True
+    ),
+    "gemini-4-hydrogen": CapabilityProfile(
+        min_context_length=1_048_576, requires_vision=True, requires_structured_output=True
+    ),
+    "gemini-4-carbon": CapabilityProfile(
+        min_context_length=1_048_576, requires_vision=True, requires_structured_output=True
+    ),
     "gemini-3.1-pro-preview": CapabilityProfile(
         min_context_length=1_000_000, requires_vision=True, requires_structured_output=True
     ),

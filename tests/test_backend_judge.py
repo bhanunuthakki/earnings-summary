@@ -516,7 +516,7 @@ def test_judge_purpose_registered() -> None:
     )
     from llm.prompt_versions import prompt_version_for
 
-    assert LLM_MODELS[JUDGE_PURPOSE] == "claude-opus-4-8"  # Opus judge pin
+    assert LLM_MODELS[JUDGE_PURPOSE] == "claude-opus-5-5"  # Opus judge pin
     # Gemini side resolves to the strong (Pro) tier, NOT the fast-classifier tier.
     assert gemini_model_for(JUDGE_PURPOSE) == GEMINI_BACKEND_DEFAULT_MODEL
     assert gemini_model_for(JUDGE_PURPOSE) != GEMINI_BACKEND_FAST_MODEL

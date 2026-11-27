@@ -206,7 +206,7 @@ def run_portfolio_macro_stress_lens(
     """Public entry point — portfolio-wide macro stress digest."""
     scenario_id = str(getattr(scenario_obj, "id", "scenario"))
     purpose = f"lens:portfolio_macro_stress:{scenario_id}"
-    model = "claude-opus-4-8"
+    model = "claude-opus-5-5"
     db_path = resolve_db_path(None)
 
     ctx = build_portfolio_macro_stress_context(scenario_obj=scenario_obj, repo_root=repo_root)

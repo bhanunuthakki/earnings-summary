@@ -305,6 +305,7 @@ def test_call_llm_captures_every_successful_backend(
     monkeypatch.setattr(cli, "_enforce_budget_pre_call", no_budget)
     if backend == "codex":
         monkeypatch.setenv(cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+        monkeypatch.setattr(cli, "subscription_route", lambda: ("codex", "claude"))
         monkeypatch.setattr(codex_backend, "call_codex_llm", answer)
         result = cli.call_llm("prompt", purpose="bear_case")
     elif backend == "gemini":

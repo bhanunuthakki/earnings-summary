@@ -93,7 +93,7 @@ def _ctx_bull_case(ticker: str | None, repo_root: Path) -> LensContext | None:
 
 LENS = Lens(
     name="bull_case",
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     scope="ticker",
     prompt_template=_PROMPT_BULL_CASE,
     build_context=_ctx_bull_case,

@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """P4 cross-family judge pool: DeepSeek (OpenRouter) + Codex (ChatGPT
 membership) alongside Claude/Gemini.
 
@@ -95,7 +96,11 @@ def test_codex_failure_is_recorded_and_raised(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(cb, "_load_wrapper", boom)
     rows: list[dict[str, object]] = []
-    monkeypatch.setattr("llm.ledger.record_llm_call", lambda **kw: rows.append(kw))
+
+    def _rec(**kw: object) -> None:
+        rows.append(kw)
+
+    monkeypatch.setattr("llm.ledger.record_llm_call", _rec)
     with pytest.raises(RuntimeError, match="authentication"):
         cb.call_codex_llm("prompt", purpose="backend_compare_judge")
     assert rows and str(rows[0].get("error", "")).startswith("[codex]")
@@ -122,15 +127,15 @@ def test_judge_error_still_counts_as_infra_not_quality() -> None:
     assert verdict.recommendation == JUDGE_DEGRADED
 
 
-def test_scheduled_runs_do_not_use_the_dead_gemini_judge() -> None:
-    """The gap that made every sweep unpromotable: the weekly orchestrator and
-    the prompt-A/B driver both defaulted to ("claude","gemini"). With Gemini's
-    key invalid, half of every judgment errored -> JUDGE_DEGRADED -> nothing
-    could ever clear a promotion bar. Scheduled runs now default to the LIVE
-    cross-family pool."""
+def test_scheduled_runs_use_gemini_neon_and_claude_cross_family_judges() -> None:
+    """Scheduled runs follow gemini > claude with Neon as driver and Claude as
+    external model family, while keeping disabled Codex out of DEFAULT_JUDGES."""
     from llm.model_ladder import DEFAULT_JUDGES
 
-    assert GEMINI not in DEFAULT_JUDGES
+    assert CODEX not in DEFAULT_JUDGES
+    assert DEFAULT_JUDGES == (GEMINI, CLAUDE)
+    assert JUDGE_POOL[GEMINI] == "gemini-4-neon"
+    assert JUDGE_POOL[CLAUDE] == "claude-opus-5-5"
     assert set(DEFAULT_JUDGES) <= set(JUDGE_POOL)
     # Cross-family by construction: not all one vendor.
     assert len(set(DEFAULT_JUDGES)) >= 2
@@ -141,4 +146,4 @@ def test_scheduled_runs_do_not_use_the_dead_gemini_judge() -> None:
     for rel in ("execution/run_weekly_model_eval.py", "execution/run_prompt_ab.py"):
         src = (root / rel).read_text(encoding="utf-8")
         assert "DEFAULT_JUDGES" in src, rel
-        assert '"claude", "gemini"' not in src, f"{rel} still hardcodes the dead pair"
+        assert '"claude", "gemini"' not in src, f"{rel} still hardcodes the raw pair"

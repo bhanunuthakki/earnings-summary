@@ -182,7 +182,7 @@ def run_macro_scenario_lens(
     """Public entry point — single-ticker macro scenario read-through."""
     scenario_id = str(getattr(scenario_obj, "id", "scenario"))
     purpose = f"lens:macro_scenario:{scenario_id}"
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-5-5"
     db_path = resolve_db_path(None)
 
     ctx = _ctx_macro_scenario(scenario_obj=scenario_obj, ticker=ticker, repo_root=repo_root)

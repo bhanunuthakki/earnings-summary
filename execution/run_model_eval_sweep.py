@@ -84,7 +84,7 @@ from llm.model_eval import (  # noqa: E402
     judge_case,
     run_model,
 )
-from llm.model_ladder import cheaper_candidates  # noqa: E402
+from llm.model_ladder import JUDGE_POOL, cheaper_candidates  # noqa: E402
 from llm.model_overrides import record_verdict  # noqa: E402
 from llm.nominator import (  # noqa: E402
     KIND_MODEL_DOWNGRADE,
@@ -274,7 +274,7 @@ def _discover_active_purposes(
 
 
 def _judge_model_for(judge_backend: str) -> str | None:
-    return "claude-opus-4-8" if judge_backend == CLAUDE else "gemini-3.1-pro-preview"
+    return JUDGE_POOL.get(judge_backend)
 
 
 def _checklist_discrimination(case_audit: list[dict[str, object]]) -> float | None:

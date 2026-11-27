@@ -1,4 +1,4 @@
-"""Scheduled provider policy stays Codex-first and fails closed."""
+"""Scheduled provider policy keeps Codex disabled, Claude subscription-primary, and fails closed."""
 
 from __future__ import annotations
 
@@ -17,91 +17,100 @@ def _raise_assertion(message: str) -> None:
     raise AssertionError(message)
 
 
-def test_scheduled_policy_can_forbid_claude_fallback(
+def test_disabled_codex_primary_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
-    monkeypatch.setenv(llm_cli.SUBSCRIPTION_FALLBACK_DISABLED_ENV_VAR, "1")
-
-    def fail_codex(_prompt: str, **_kwargs: object) -> str:
-        raise RuntimeError("codex unavailable")
 
     def fail_claude(*_args: object, **_kwargs: object) -> None:
-        _raise_assertion("Claude must not run")
+        _raise_assertion("Claude must not run when an invalid/disabled primary is requested")
 
-    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
     monkeypatch.setattr(llm_cli, "_call_claude", fail_claude)
 
-    with pytest.raises(RuntimeError, match="codex unavailable"):
+    with pytest.raises(llm_cli.LLMSetupError):
         llm_cli.call_llm("question", purpose="bear_case")
 
 
-def test_streaming_ask_honors_codex_primary_provider(
+def test_scheduled_policy_can_forbid_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
-    observed: dict[str, object] = {}
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "claude")
+    monkeypatch.setenv(llm_cli.SUBSCRIPTION_FALLBACK_DISABLED_ENV_VAR, "1")
+
+    def fail_claude(_prompt: str, **_kwargs: object) -> str:
+        raise RuntimeError("claude unavailable")
+
+    def fail_codex(*_args: object, **_kwargs: object) -> None:
+        _raise_assertion("Codex must not run")
+
+    monkeypatch.setattr(llm_cli, "_call_claude", fail_claude)
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
+
+    with pytest.raises(RuntimeError, match="claude unavailable"):
+        llm_cli.call_llm("question", purpose="bear_case")
+
+
+def test_streaming_ask_honors_claude_primary_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "claude")
+    which_calls: list[str] = []
 
     def no_budget(*_args: object, **_kwargs: object) -> None:
         return None
 
-    def fake_buffered(
-        prompt: str, *, purpose: str, backend: str | None = None
-    ) -> Iterator[dict[str, str]]:
-        observed.update(prompt=prompt, purpose=purpose, backend=backend)
-        yield {"type": "delta", "text": "codex answer"}
-        yield {"type": "final", "text": "codex answer"}
+    def fail_buffered(*_args: object, **_kwargs: object) -> Iterator[dict[str, str]]:
+        _raise_assertion("Claude-primary streaming must not take Codex buffered path")
+        yield {}
 
-    def fail_which(*_args: object, **_kwargs: object) -> None:
-        _raise_assertion("Codex-primary streaming must not resolve Claude")
+    def fake_which(name: str) -> str | None:
+        which_calls.append(name)
+        return None
+
+    def fail_codex(*_args: object, **_kwargs: object) -> None:
+        _raise_assertion("Claude-primary streaming must not invoke Codex")
 
     monkeypatch.setattr(llm_cli, "_enforce_budget_pre_call", no_budget)
-    monkeypatch.setattr(llm_cli, "_buffered_stream_answer", fake_buffered)
-    monkeypatch.setattr(llm_cli.shutil, "which", fail_which)
+    monkeypatch.setattr(llm_cli, "_buffered_stream_answer", fail_buffered)
+    monkeypatch.setattr(llm_cli.shutil, "which", fake_which)
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
 
     events = list(llm_cli.stream_llm("question", purpose="ask_answer"))
 
-    assert events[-1] == {"type": "final", "text": "codex answer"}
-    assert observed == {
-        "prompt": "question",
-        "purpose": "ask_answer",
-        "backend": "codex",
-    }
+    assert which_calls == ["claude"]
+    assert events == [{"type": "error", "error": "answer transport is not configured"}]
 
 
-def test_scheduled_explicit_claude_tier_uses_codex_primary(
+def test_scheduled_explicit_tier_uses_claude_primary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "claude")
     monkeypatch.setenv("LLM_EXPLICIT_MODEL_POLICY", "primary-tier")
     seen: dict[str, object] = {}
 
-    def fake_codex(_prompt: str, **kwargs: object) -> str:
+    def fake_claude(_prompt: str, **kwargs: object) -> str:
         seen.update(kwargs)
-        return "scheduled Codex"
+        return "scheduled Claude"
 
-    def fail_claude(*_args: object, **_kwargs: object) -> None:
+    def fail_gemini(*_args: object, **_kwargs: object) -> None:
         _raise_assertion("scheduled tier pins must honor the configured primary provider")
 
-    monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
-    monkeypatch.setattr(llm_cli, "_call_claude", fail_claude)
+    monkeypatch.setattr(llm_cli, "_call_claude", fake_claude)
+    monkeypatch.setattr(gemini_backend, "call_gemini", fail_gemini)
 
     assert (
-        llm_cli.call_llm("question", purpose="bear_case", model="claude-opus-4-8")
-        == "scheduled Codex"
+        llm_cli.call_llm("question", purpose="bear_case", model="gemini-4-neon")
+        == "scheduled Claude"
     )
-    assert seen["model"] == "gpt-5.6-sol"
+    assert seen["model"] == llm_cli.DEFAULT_MODEL
 
 
 @pytest.mark.parametrize(
     ("primary", "model", "backend", "expected_model"),
     [
-        ("codex", "claude-opus-4-8", "claude", "gpt-5.6-sol"),
-        ("codex", "gemini-3-flash-preview", "gemini", "gpt-5.6-luna"),
-        ("codex", "deepseek/deepseek-chat", "openrouter", "gpt-5.6-luna"),
         ("claude", "claude-opus-4-8", "claude", "claude-opus-4-8"),
-        ("claude", "gemini-3-flash-preview", "gemini", "claude-haiku-4-5-20251001"),
-        ("claude", "deepseek/deepseek-chat", "openrouter", "claude-haiku-4-5-20251001"),
+        ("claude", "gemini-3-flash-preview", "gemini", "claude-haiku-5-5"),
+        ("claude", "deepseek/deepseek-chat", "openrouter", "claude-haiku-5-5"),
     ],
 )
 def test_scheduled_explicit_provider_pins_are_primary_provider_capability_requests(
@@ -127,7 +136,7 @@ def test_scheduled_explicit_provider_pins_are_primary_provider_capability_reques
 def test_scheduled_database_model_override_cannot_escape_primary_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "claude")
     monkeypatch.setenv(resolver.EXPLICIT_MODEL_POLICY_ENV_VAR, resolver.PRIMARY_TIER_MODEL_POLICY)
 
     def gemini_override(*_args: object, **_kwargs: object) -> str:
@@ -136,19 +145,19 @@ def test_scheduled_database_model_override_cannot_escape_primary_provider(
     monkeypatch.setattr(resolver, "active_override", gemini_override)
     seen: dict[str, object] = {}
 
-    def fake_codex(_prompt: str, **kwargs: object) -> str:
+    def fake_claude(_prompt: str, **kwargs: object) -> str:
         seen.update(kwargs)
-        return "scheduled Codex"
+        return "scheduled Claude"
 
     def fail_other_provider(*_args: object, **_kwargs: object) -> None:
         _raise_assertion("scheduled model overrides must not escape the primary provider")
 
-    monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
+    monkeypatch.setattr(llm_cli, "_call_claude", fake_claude)
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_other_provider)
     monkeypatch.setattr(gemini_backend, "call_gemini", fail_other_provider)
-    monkeypatch.setattr(llm_cli, "_call_claude", fail_other_provider)
 
-    assert llm_cli.call_llm("question", purpose="bear_case") == "scheduled Codex"
-    assert seen["model"] == "gpt-5.6-luna"
+    assert llm_cli.call_llm("question", purpose="bear_case") == "scheduled Claude"
+    assert seen["model"] == llm_cli.FAST_CLASSIFIER_MODEL
 
 
 @pytest.mark.parametrize(
@@ -222,17 +231,19 @@ def test_provider_wide_fallback_policy_blocks_claude_to_codex_fallback(
 def test_scheduled_policy_can_forbid_claude_web_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "claude")
     monkeypatch.setenv(llm_cli.SUBSCRIPTION_FALLBACK_DISABLED_ENV_VAR, "1")
-
-    def fail_codex(_prompt: str, **_kwargs: object) -> str:
-        raise RuntimeError("codex web unavailable")
+    monkeypatch.setattr(llm_client, "_setup_verified", True)
+    monkeypatch.setattr(llm_client, "_claude_cli_path", "C:/fake/claude.CMD")
 
     def fail_claude_web(*_args: object, **_kwargs: object) -> None:
-        _raise_assertion("Claude web must not run")
+        raise RuntimeError("claude web unavailable")
 
-    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
+    def fail_codex(*_args: object, **_kwargs: object) -> None:
+        _raise_assertion("Codex must not run")
+
     monkeypatch.setattr(llm_cli.subprocess, "run", fail_claude_web)
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
 
-    with pytest.raises(RuntimeError, match="codex web unavailable"):
+    with pytest.raises(RuntimeError, match="claude web unavailable"):
         llm_cli.call_llm_with_web("question", purpose="recent_developments")
