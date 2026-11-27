@@ -6,7 +6,7 @@ Grading convention: 1.0 = clear pass, 0.5 = partial, 0.0 = fail.
 
 Include: _shared_mbi_definitions.md
 
-## Facet: whats_priced_in_ahead_of_print [weight: 0.25] — Connects near-term bar to multi-year market expectations
+## Facet: whats_priced_in_ahead_of_print [weight: 0.30] — Connects near-term bar to multi-year market expectations
 - **1.0:** Establishes the exact operational baseline in a compact multi-quarter trend-to-bar table (`Q-4..Q0 -> Q+1E`) alongside guidance and dated consensus (or concise gap disclosure), and explains what the current stock price assumes both for this quarter and for the multi-year trajectory — separating one-quarter timing noise from real expectation shifts.
 - **0.5:** Recites prior results and guidance accurately in prose without a multi-quarter trend view or connecting them to what is already priced into the stock.
 - **0.0:** Missing or inaccurate baseline, or fails to frame what is priced in heading into the print.
@@ -16,7 +16,7 @@ Include: _shared_mbi_definitions.md
 - **0.5:** Asks surface-level KPI questions ("did NIM expand?", "did ARR beat?") without digging into underlying operational causality.
 - **0.0:** Generic sector boilerplate questions.
 
-## Facet: asymmetry_candor_and_imagination [weight: 0.20] — Low-confidence assumptions, upside imagination, and downside risk
+## Facet: asymmetry_candor_and_imagination [weight: 0.15] — Low-confidence assumptions, upside imagination, and downside risk
 - **1.0:** Candidly names what remains low-confidence ahead of the print, maps asymmetric paths tied to multi-year compounding IRR rather than guessing the 1-day stock move (adding an optional illustrative unit-math or scenario table when the preview involves a major model/DCF revision or structural unit-economics debate, or concise bounded path math otherwise), and considers both downside breaking points and where the market might be under-imagining multi-year operational compounding.
 - **0.5:** Lists upside/downside cases vaguely without bounded path math or tying them to specific low-confidence assumptions and long-term compounding asymmetry.
 - **0.0:** Predicts short-term price action or omits downside asymmetry.
