@@ -1,5 +1,14 @@
 # Operations & Governance Surface Impact
 
+## Unified transcript & KPI admission pipeline — November 26, 2026
+
+Disposition: **existing offline CLI extended; no new dashboard route, panel, scheduler task, service, or database schema**.
+- Shared canonical transcript path predicates (`transcripts.acquisition_semantics.is_canonical_issuer_transcript_path` and `is_canonical_transcript_file_path`) unify `pipeline.transcript_acquisition`, `pipeline.commitment_scan_receipts`, `execution/backfill_transcripts.py`, and `execution/audit_transcript_evidence.py` so issuer IR PDFs (`ir_documents/<TICKER>/...`) and retained raw/processed text transcripts bind through one path authority.
+- `execution/ingest_transcripts.py --admit-retained [--transcript-id ID ...] [--ticker TICKER] [--dry-run]` exposes `pipeline.transcript_acquisition.admit_retained_transcripts`, which hash-verifies retained on-disk transcript bytes and persists trigger-validated `transcript_acquisition_receipts` (failing closed on missing, symlink-escaped, or mismatched artifacts).
+- `compute.say_do_extractor.extract_for_transcript` batches contiguous transcript segments into bounded `MAX_TRANSCRIPT_CHARS` chunks while retaining exact per-segment `segment_id` validation, verbatim `source_excerpt` binding, and per-segment `ObservedTranscriptSegment` receipts.
+- Deterministic KPI writers (`compute.metrics_engine.io.persist_attempt`, `table_extractors.generic_xbrl_capture.extract`) auto-admit structured `DERIVED` / `FMP_JSON_TABLE` / `SPREADSHEET_CELL` facts through `pipeline.kpi_atomic_admission.build_atomic_semantic_context` at persist time.
+Evidence: `tests/test_unified_admission_pipeline.py`, `tests/test_commitment_scan_receipts.py`, `tests/test_bha140_segment_scans.py`, `tests/test_compute_say_do_extractor.py`, `tests/test_transcript_acquisition_periods.py`, `tests/test_audit_transcript_evidence.py`, `tests/test_kpi_atomic_admission.py`, `tests/test_generic_xbrl_capture.py`.
+
 ## Offline evidence externalization and DB compaction (PR 2B)
 
 Disposition: **bounded offline maintenance CLI, no new dashboard action or schedule**.

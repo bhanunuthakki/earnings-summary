@@ -688,10 +688,10 @@ def test_fetch_picks_longest_segment(conn: sqlite3.Connection) -> None:
 
 
 def test_second_segment_failure_returns_no_partial_manifest(conn: sqlite3.Connection) -> None:
-    transcript_id, _ = _seed_transcript(conn, "AMZN", "first", "2025-12-31")
+    transcript_id, _ = _seed_transcript(conn, "AMZN", "a" * 35_000, "2025-12-31")
     conn.execute(
         "INSERT INTO transcript_segments (transcript_id, seq, text) VALUES (?, 1, ?)",
-        (transcript_id, "second"),
+        (transcript_id, "b" * 35_000),
     )
     conn.commit()
     calls = 0
@@ -705,7 +705,7 @@ def test_second_segment_failure_returns_no_partial_manifest(conn: sqlite3.Connec
 
     with pytest.raises(CommitmentParseError):
         extract_for_transcript(conn, transcript_id, llm_call=llm)
-    assert calls == 3  # first segment, second segment, retry
+    assert calls == 3  # first chunk, second chunk, retry
 
 
 def test_fetch_returns_none_when_no_segments(conn: sqlite3.Connection) -> None:

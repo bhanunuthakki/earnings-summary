@@ -158,6 +158,41 @@ class _LLMResponse(BaseModel):
     novel_indicators: list[_LLMManagementIndicator]
 
 
+class _LLMBatchedCommitment(_LLMCommitment):
+    """Commitment returned from a multi-segment prompt, anchored to an exact segment_id."""
+
+    segment_id: int = Field(gt=0)
+
+    @field_validator("segment_id", mode="before")
+    @classmethod
+    def _reject_boolean_segment_id(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("segment_id must be an integer, not boolean")
+        return value
+
+
+class _LLMBatchedManagementIndicator(_LLMManagementIndicator):
+    """Novel indicator returned from a multi-segment prompt, anchored to an exact segment_id."""
+
+    segment_id: int = Field(gt=0)
+
+    @field_validator("segment_id", mode="before")
+    @classmethod
+    def _reject_boolean_segment_id(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("segment_id must be an integer, not boolean")
+        return value
+
+
+class _LLMBatchedResponse(BaseModel):
+    """Top-level shape expected when multiple transcript segments are batched in one call."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    commitments: list[_LLMBatchedCommitment]
+    novel_indicators: list[_LLMBatchedManagementIndicator]
+
+
 class TranscriptExtractionManifest(CommitmentExtractionManifest):
     """Commitments plus unpromoted, source-bound novel indicators."""
 
@@ -647,13 +682,205 @@ def parse_llm_response(
     return TranscriptExtractionManifest(commitments=commitments, indicators=indicators)
 
 
+def _format_batched_segment(segment: _TranscriptSegmentInput) -> str:
+    speaker = (segment.source.speaker or "Unknown").replace("\n", " ").strip() or "Unknown"
+    return f"[SEGMENT id={segment.source.segment_id} speaker={speaker}]\n{segment.text}\n[/SEGMENT]"
+
+
+def _chunk_transcript_segments(
+    segments: Sequence[_TranscriptSegmentInput],
+    *,
+    max_chars: int = MAX_TRANSCRIPT_CHARS,
+) -> list[list[_TranscriptSegmentInput]]:
+    """Group contiguous transcript segments into bounded chunks in deterministic source order."""
+    chunks: list[list[_TranscriptSegmentInput]] = []
+    current: list[_TranscriptSegmentInput] = []
+    current_len = 0
+    for segment in segments:
+        formatted_len = len(_format_batched_segment(segment))
+        separator = 2 if current else 0
+        if current and current_len + separator + formatted_len > max_chars:
+            chunks.append(current)
+            current = [segment]
+            current_len = formatted_len
+        else:
+            current.append(segment)
+            current_len += separator + formatted_len
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _build_batched_extraction_prompt(
+    *,
+    ticker: str,
+    segments: Sequence[_TranscriptSegmentInput],
+    kpi_catalog: list[tuple[str, str]],
+    period_made: datetime,
+) -> str:
+    """Assemble a multi-segment LLM prompt preserving exact per-segment IDs."""
+    text = "\n\n".join(_format_batched_segment(segment) for segment in segments)
+    catalog_lines = "\n".join(f"  - {name}  (unit: {unit})" for name, unit in kpi_catalog)
+    if not kpi_catalog:
+        catalog_lines = "  (no KPIs defined for this ticker — return commitments: [])"
+    period_made_iso = period_made.date().isoformat()
+    valid_ids = ", ".join(str(segment.source.segment_id) for segment in segments)
+    return f"""You are an equity research analyst extracting forward-looking quantitative commitments from an earnings call transcript.
+
+TICKER: {ticker.upper()}
+CALL DATE (period_made): {period_made_iso}
+
+YOUR TASK
+The transcript below is divided into tagged segments (`[SEGMENT id=<N> speaker=...] ... [/SEGMENT]`).
+Identify only quantitative, forward-looking statements that constitute a commitment management is making about a future quarter or year. Examples that QUALIFY:
+  - "We expect Q1 revenue to grow at least 15% YoY"  -> comparator=ge, target_value=15, unit=percent
+  - "Operating margin should be around 30% next quarter" -> comparator=eq, target_value=30, unit=percent
+  - "Capex will not exceed $20B for the year"          -> comparator=le, target_value=20, unit=actual
+
+Examples that DO NOT qualify (skip them):
+  - Backward-looking results ("Q4 revenue grew 12%")
+  - Vague qualitative ("we expect strength continuing")
+  - Analyst questions or third-party comments (use analyst questions only as context for management's answer)
+
+VALID SEGMENT IDS IN THIS CHUNK: {valid_ids}
+Every item in `commitments` and `novel_indicators` MUST include `"segment_id"` set to the exact integer ID from the `[SEGMENT id=...]` block containing management's statement, and every `novel_indicators.source_excerpt` MUST be an exact verbatim substring of that segment's text.
+
+VALID KPI NAMES (use ONLY these for `commitments` — do not create a new
+catalog KPI name here):
+{catalog_lines}
+
+NOVEL / ONE-OFF MANAGEMENT INDICATORS
+For a quantitative management-reported measurement that is not an exact valid
+KPI name above, record it in `novel_indicators` instead of silently dropping
+it. Include the exact `segment_id`, raw label, value, unit, scope, whether
+management presented it as recurring or one-off, and a short exact verbatim
+source excerpt copied from that segment. These are research staging
+observations, NOT canonical KPIs and must never be included in `commitments`
+unless they match a valid KPI name above.
+
+OUTPUT FORMAT
+Return ONLY valid JSON, no prose, no markdown fences, with this exact shape:
+
+{{
+  "commitments": [
+    {{
+      "segment_id": 123,
+      "kpi_name": "<MUST match exactly one name from the catalog above>",
+      "comparator": "<one of: lt, le, gt, ge, eq>",
+      "target_value": "<numeric, no units, no commas>",
+      "unit": "<one of: percent, actual, ratio, count, basis_points, bps>",
+      "period_target": "<YYYY-MM-DD — the END of the calendar quarter management is guiding for>",
+      "narrative": "<verbatim or near-verbatim quote from that segment, max 500 chars>"
+    }}
+  ],
+  "novel_indicators": [
+    {{
+      "segment_id": 123,
+      "raw_label": "<management's label, preserving qualifiers>",
+      "value": "<numeric, no units, no commas>",
+      "unit": "<one of: actual, thousands, millions, billions, percent, ratio, bps, count>",
+      "scope": "<one of: consolidated, segment, product, geography, unspecified>",
+      "recurrence": "<one of: recurring, one_off, unknown>",
+      "source_excerpt": "<exact verbatim substring copied from that segment, max 2,000 chars>"
+    }}
+  ]
+}}
+
+If neither category is found, return: {{"commitments": [], "novel_indicators": []}}
+
+TRANSCRIPT SEGMENTS:
+---
+{text}
+---
+"""
+
+
+def _parse_json_strict(json_text: str) -> object:
+    cleaned = _FENCE_RX.sub("", json_text).strip()
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        payload_object: dict[str, object] = {}
+        for key, value in pairs:
+            if key in payload_object:
+                raise ValueError(f"duplicate JSON key: {key}")
+            payload_object[key] = value
+        return payload_object
+
+    try:
+        return json.loads(cleaned, object_pairs_hook=reject_duplicate_keys)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise CommitmentParseError(f"LLM response is not valid JSON: {e}") from e
+
+
+def _parse_batched_llm_response(
+    json_text: str,
+    *,
+    contexts_by_segment_id: dict[int, TranscriptContext],
+) -> TranscriptExtractionManifest:
+    """Parse a batched multi-segment JSON response into exact segment-anchored outputs."""
+    payload = _parse_json_strict(json_text)
+    try:
+        response = _LLMBatchedResponse.model_validate(payload)
+    except ValidationError as e:
+        raise CommitmentParseError(f"LLM response failed schema validation: {e}") from e
+
+    commitments: list[CommitmentInput] = []
+    indicators: list[ManagementIndicatorInput] = []
+    try:
+        for raw in response.commitments:
+            context = contexts_by_segment_id.get(raw.segment_id)
+            if context is None:
+                raise CommitmentParseError(
+                    f"LLM response referenced unknown segment_id={raw.segment_id}"
+                )
+            commitments.append(
+                CommitmentInput(
+                    ticker=context.ticker.upper(),
+                    period_made=context.period_made,
+                    transcript_segment_id=context.transcript_segment_id,
+                    period_target=raw.period_target,
+                    kpi_name=raw.kpi_name,
+                    comparator=raw.comparator,
+                    target_value=raw.target_value,
+                    unit=raw.unit,
+                    narrative=raw.narrative,
+                )
+            )
+        for raw in response.novel_indicators:
+            context = contexts_by_segment_id.get(raw.segment_id)
+            if context is None:
+                raise CommitmentParseError(
+                    f"LLM response referenced unknown segment_id={raw.segment_id}"
+                )
+            if context.source_doc_id is None:
+                raise CommitmentParseError("novel indicators require a transcript source document")
+            indicators.append(
+                ManagementIndicatorInput(
+                    ticker=context.ticker.upper(),
+                    transcript_segment_id=context.transcript_segment_id,
+                    raw_label=raw.raw_label,
+                    value=raw.value,
+                    unit=raw.unit,
+                    scope=raw.scope,
+                    recurrence=raw.recurrence,
+                    speaker=None,
+                    source_excerpt=raw.source_excerpt,
+                )
+            )
+    except ValidationError as exc:
+        raise CommitmentParseError(
+            f"LLM response failed promoted output validation: {exc}"
+        ) from exc
+    return TranscriptExtractionManifest(commitments=commitments, indicators=indicators)
+
+
 def extract_for_transcript(
     conn: sqlite3.Connection,
     transcript_id: int,
     *,
     llm_call: Callable[[str], str],
 ) -> TranscriptScanResult:
-    """Orchestrator: pull transcript, build prompt, call LLM, parse, return manifest.
+    """Orchestrator: pull transcript, batch segments into bounded prompts, call LLM, parse.
 
     `llm_call` is injected so tests can stub the LLM. Production callers pass
     a governed wrapper around ``call_llm(..., purpose="saydo_commitment_extract",
@@ -661,6 +888,10 @@ def extract_for_transcript(
     purpose ledger, budgets and model routing.
 
     Behavior notes:
+      - Contiguous segments are grouped into chunks up to ``MAX_TRANSCRIPT_CHARS``
+        so multi-turn calls preserve Q&A context without spawning one LLM call per
+        speaker turn, while still anchoring every output to its exact ``segment_id``
+        and emitting one ``ObservedTranscriptSegment`` per segment in source order.
       - Empty KPI catalog still scans: it cannot yield a catalog-backed
         commitment, but can yield a reviewable novel management indicator.
       - Unusable LLM response ⇒ ONE retry with explicit feedback, then
@@ -691,29 +922,101 @@ def extract_for_transcript(
     commitments: list[CommitmentInput] = []
     indicators: list[ManagementIndicatorInput] = []
     observed_segments: list[ObservedTranscriptSegment] = []
-    for segment in transcript_segments:
-        text = segment.text
-        source = segment.source
-        segment_id = source.segment_id
-        period_end = datetime.fromisoformat(source.period_end)
-        prompt = build_extraction_prompt(
+
+    for chunk in _chunk_transcript_segments(transcript_segments):
+        if len(chunk) == 1:
+            segment = chunk[0]
+            source = segment.source
+            segment_id = source.segment_id
+            period_end = datetime.fromisoformat(source.period_end)
+            prompt = build_extraction_prompt(
+                ticker=ticker,
+                transcript_text=segment.text,
+                kpi_catalog=catalog,
+                period_made=period_end,
+            )
+            context = TranscriptContext(
+                ticker=ticker,
+                period_made=period_end,
+                transcript_segment_id=segment_id,
+                source_doc_id=source.source_document_id,
+                speaker=source.speaker,
+            )
+
+            def parse_and_validate(
+                response: str, *, segment_context: TranscriptContext = context
+            ) -> TranscriptExtractionManifest:
+                manifest = parse_llm_response(response, context=segment_context)
+                try:
+                    for indicator in manifest.indicators:
+                        validate_indicator_source_binding(conn, indicator=indicator)
+                except ValueError as exc:
+                    raise CommitmentParseError(
+                        f"novel indicator source evidence failed exact segment binding: {exc}"
+                    ) from exc
+                return manifest
+
+            response_text = llm_call(prompt)
+            try:
+                manifest = parse_and_validate(response_text)
+            except CommitmentParseError as first_exc:
+                validation_error = str(first_exc)
+                log.warning(
+                    "transcript_id=%d segment_id=%d ticker=%s: unusable LLM response, retrying with feedback: %s",
+                    transcript_id,
+                    segment_id,
+                    ticker,
+                    validation_error,
+                )
+                retry_text = llm_call(
+                    _RETRY_PREAMBLE
+                    + f"VALIDATION ERROR: {validation_error}\n"
+                    + "Copy each novel indicator source_excerpt exactly from the transcript.\n\n"
+                    + prompt
+                )
+                manifest = parse_and_validate(retry_text)
+            commitments.extend(manifest.commitments)
+            indicators.extend(manifest.indicators)
+            commitment_count = len(manifest.commitments)
+            indicator_count = len(manifest.indicators)
+            observed_segments.append(
+                ObservedTranscriptSegment(
+                    source=source,
+                    disposition=(
+                        "parsed_no_output"
+                        if commitment_count + indicator_count == 0
+                        else "parsed_with_output"
+                    ),
+                    commitment_count=commitment_count,
+                    indicator_count=indicator_count,
+                )
+            )
+            continue
+
+        chunk_period_end = datetime.fromisoformat(chunk[0].source.period_end)
+        contexts_by_id = {
+            segment.source.segment_id: TranscriptContext(
+                ticker=ticker,
+                period_made=datetime.fromisoformat(segment.source.period_end),
+                transcript_segment_id=segment.source.segment_id,
+                source_doc_id=segment.source.source_document_id,
+                speaker=segment.source.speaker,
+            )
+            for segment in chunk
+        }
+        prompt = _build_batched_extraction_prompt(
             ticker=ticker,
-            transcript_text=text,
+            segments=chunk,
             kpi_catalog=catalog,
-            period_made=period_end,
-        )
-        context = TranscriptContext(
-            ticker=ticker,
-            period_made=period_end,
-            transcript_segment_id=segment_id,
-            source_doc_id=source.source_document_id,
-            speaker=source.speaker,
+            period_made=chunk_period_end,
         )
 
-        def parse_and_validate(
-            response: str, *, segment_context: TranscriptContext = context
+        def parse_and_validate_chunk(
+            response: str,
+            *,
+            chunk_contexts: dict[int, TranscriptContext] = contexts_by_id,
         ) -> TranscriptExtractionManifest:
-            manifest = parse_llm_response(response, context=segment_context)
+            manifest = _parse_batched_llm_response(response, contexts_by_segment_id=chunk_contexts)
             try:
                 for indicator in manifest.indicators:
                     validate_indicator_source_binding(conn, indicator=indicator)
@@ -725,39 +1028,48 @@ def extract_for_transcript(
 
         response_text = llm_call(prompt)
         try:
-            manifest = parse_and_validate(response_text)
+            manifest = parse_and_validate_chunk(response_text)
         except CommitmentParseError as first_exc:
             validation_error = str(first_exc)
             log.warning(
-                "transcript_id=%d segment_id=%d ticker=%s: unusable LLM response, retrying with feedback: %s",
+                "transcript_id=%d chunk_segments=%d ticker=%s: unusable LLM response, retrying with feedback: %s",
                 transcript_id,
-                segment_id,
+                len(chunk),
                 ticker,
                 validation_error,
             )
             retry_text = llm_call(
                 _RETRY_PREAMBLE
                 + f"VALIDATION ERROR: {validation_error}\n"
-                + "Copy each novel indicator source_excerpt exactly from the transcript.\n\n"
+                + "Include a valid integer segment_id from this chunk and copy each novel indicator "
+                + "source_excerpt verbatim from that exact segment.\n\n"
                 + prompt
             )
-            manifest = parse_and_validate(retry_text)
+            manifest = parse_and_validate_chunk(retry_text)
+
         commitments.extend(manifest.commitments)
         indicators.extend(manifest.indicators)
-        commitment_count = len(manifest.commitments)
-        indicator_count = len(manifest.indicators)
-        observed_segments.append(
-            ObservedTranscriptSegment(
-                source=source,
-                disposition=(
-                    "parsed_no_output"
-                    if commitment_count + indicator_count == 0
-                    else "parsed_with_output"
-                ),
-                commitment_count=commitment_count,
-                indicator_count=indicator_count,
+        commit_counts: dict[int, int] = {seg.source.segment_id: 0 for seg in chunk}
+        ind_counts: dict[int, int] = {seg.source.segment_id: 0 for seg in chunk}
+        for item in manifest.commitments:
+            commit_counts[item.transcript_segment_id] += 1
+        for item in manifest.indicators:
+            ind_counts[item.transcript_segment_id] += 1
+        for segment in chunk:
+            seg_id = segment.source.segment_id
+            c_count = commit_counts[seg_id]
+            i_count = ind_counts[seg_id]
+            observed_segments.append(
+                ObservedTranscriptSegment(
+                    source=segment.source,
+                    disposition=(
+                        "parsed_no_output" if c_count + i_count == 0 else "parsed_with_output"
+                    ),
+                    commitment_count=c_count,
+                    indicator_count=i_count,
+                )
             )
-        )
+
     return TranscriptScanResult(
         commitments=commitments,
         indicators=indicators,

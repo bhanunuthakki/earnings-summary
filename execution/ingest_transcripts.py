@@ -56,6 +56,7 @@ from pipeline.transcript_acquisition import (
     COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
+    admit_retained_transcripts,
     authorize_transcript_request,
     load_authorized_transcript_receipt,
     load_authorized_transcript_replay,
@@ -589,6 +590,19 @@ def main() -> int:
         "transcripts/raw or transcripts/processed.",
     )
     parser.add_argument(
+        "--admit-retained",
+        action="store_true",
+        help="Verify retained on-disk transcript bytes and persist missing durable "
+        "transcript_acquisition_receipts for already-ingested transcripts.",
+    )
+    parser.add_argument(
+        "--transcript-id",
+        type=int,
+        action="append",
+        default=[],
+        help="Restrict --admit-retained to specific transcript_id(s) (repeatable).",
+    )
+    parser.add_argument(
         "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"), help="Path to portfolio.db"
     )
     parser.add_argument(
@@ -610,6 +624,19 @@ def main() -> int:
         dirs_overridden = _TRANSCRIPT_DIRS != _DEFAULT_TRANSCRIPT_DIRS
         evidence_root = PROJECT_ROOT if dirs_overridden else evidence_root_for_database(args.db)
         staging_root = evidence_root / ".tmp" / "transcript-acquisition"
+        if args.admit_retained:
+            report = admit_retained_transcripts(
+                conn,
+                project_root=evidence_root,
+                private_root=staging_root,
+                tickers=[args.ticker] if args.ticker else None,
+                transcript_ids=args.transcript_id or None,
+                as_of=current_utc_date(),
+                apply=not args.dry_run,
+            )
+            print(report.model_dump_json(indent=2))
+            has_errors = any(status.startswith("error:") for status in report.skipped_counts)
+            return 1 if has_errors else 0
         transcript_dirs = (
             _TRANSCRIPT_DIRS
             if dirs_overridden

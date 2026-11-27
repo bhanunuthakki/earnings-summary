@@ -15,13 +15,14 @@ import sqlite3
 import tempfile
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.documents import DocType, SourceType
+from pipeline.data_coverage_dispositions import fiscal_quarter_period_end
 from pipeline.reported_period_inventory import reported_period_window_from_inventory
 from pipeline.source_policy import (
     ArtifactKind,
@@ -32,11 +33,13 @@ from pipeline.source_policy import (
     StoredIdentityStatus,
     authorize_collection_target_in_connection,
     canonical_https_url,
+    current_utc_date,
     decision_for,
     fiscal_quarter_end,
     ir_url_is_authorized,
     issuer_policy,
 )
+from provenance.selection import selected_transcripts_relation
 from provenance.source_regime import SourceRegime, contract_for, receipt_identity
 from runtime.deterministic import canonical_json_ascii as _canonical_json
 from transcripts.acquisition_semantics import (
@@ -52,6 +55,8 @@ from transcripts.acquisition_semantics import (
     TranscriptReportingStatus,
     TranscriptStoredTarget,
     authorize_transcript_acquisition_request,
+    is_canonical_issuer_transcript_path,
+    parse_canonical_transcript_filename,
     transcript_authorization_idempotency_key,
     validate_transcript_acquisition_authorization,
 )
@@ -83,6 +88,16 @@ def _require_current_source_request(request: TranscriptAcquisitionRequest) -> No
         raise TranscriptAcquisitionDeniedError(
             "current transcript acquisition requires a source-bound request@2"
         )
+
+
+def _is_retained_reindex_source_url(source_url: str) -> bool:
+    """Return True for a safe local reindex provenance marker on a persisted IR document."""
+    return (
+        source_url.startswith("reindex_subdir:")
+        and len(source_url) > len("reindex_subdir:")
+        and ".." not in source_url
+        and "\x00" not in source_url
+    )
 
 
 class AuthorizedTranscriptArtifact(BaseModel):
@@ -120,14 +135,14 @@ class AuthorizedTranscriptArtifact(BaseModel):
             if relative.name != expected_name:
                 raise ValueError("canonical document path does not match authorized target")
         else:
-            is_canonical_issuer_path = (
-                len(relative.parts) >= 3
-                and relative.parts[0] == "ir_documents"
-                and relative.parts[1].upper() == request.canonical_ticker
+            is_canonical_issuer_path = is_canonical_issuer_transcript_path(
+                relative, request.canonical_ticker
             )
             if relative.name != expected_name and not is_canonical_issuer_path:
                 raise ValueError("canonical document path does not match authorized target")
-        if self.source_url is not None:
+        if self.source_url is not None and not (
+            self.document_id is not None and _is_retained_reindex_source_url(self.source_url)
+        ):
             parsed = urlsplit(self.source_url)
             if (
                 parsed.scheme != "https"
@@ -191,6 +206,7 @@ def _calendar_reported_period_window(
     fiscal_year_end_month: int | None,
     as_of: date,
     max_quarters: int = 8,
+    include_all_transcript_docs: bool = False,
 ) -> ReportedPeriodWindow | None:
     fye = _derive_fiscal_year_end(
         conn,
@@ -200,7 +216,7 @@ def _calendar_reported_period_window(
     if fye is None:
         return None
     candidates: set[date] = set()
-    for fy in range(as_of.year - 3, as_of.year + 2):
+    for fy in range(as_of.year - 4, as_of.year + 2):
         for fq in (1, 2, 3, 4):
             try:
                 q_end = fiscal_quarter_end(
@@ -250,6 +266,27 @@ def _calendar_reported_period_window(
                 continue
             if doc_end <= as_of and doc_end not in period_ends:
                 period_ends.append(doc_end)
+
+    if include_all_transcript_docs:
+        try:
+            transcripts_rel = selected_transcripts_relation(conn).sql
+            transcript_rows = conn.execute(
+                f"SELECT period_end FROM {transcripts_rel} "  # nosec B608 -- repository-owned selection relation
+                "WHERE UPPER(ticker)=? AND period_end IS NOT NULL",
+                (ticker.upper(),),
+            ).fetchall()
+        except sqlite3.Error:
+            transcript_rows = []
+        for row in transcript_rows:
+            raw = str(row[0] or "").strip()
+            if len(raw) < 10:
+                continue
+            try:
+                tr_end = date.fromisoformat(raw[:10])
+            except ValueError:
+                continue
+            if tr_end <= as_of and tr_end not in period_ends:
+                period_ends.append(tr_end)
 
     ordered = tuple(sorted(set(period_ends), reverse=True))
     if not ordered:
@@ -345,6 +382,21 @@ def _stored_target_for_request(
                 fiscal_quarter=request.fiscal_quarter,
                 fiscal_year_end=fiscal_year_end,
             )
+            if request.owner_requested and not reported_window.includes(target_end):
+                expanded_window = _calendar_reported_period_window(
+                    conn,
+                    ticker=request.canonical_ticker,
+                    fiscal_year_end_month=stored.fiscal_year_end_month,
+                    as_of=request.as_of,
+                    max_quarters=12,
+                    include_all_transcript_docs=True,
+                )
+                if (
+                    expanded_window is not None
+                    and expanded_window.fiscal_year_end == fiscal_year_end
+                    and expanded_window.includes(target_end)
+                ):
+                    reported_window = expanded_window
             reporting = (
                 TranscriptReportingStatus.ELIGIBLE
                 if reported_window.includes(target_end)
@@ -1187,10 +1239,443 @@ def stage_pending_issuer_transcripts(
     return artifacts
 
 
+class RetainedTranscriptAdmissionItem(BaseModel):
+    """Per-transcript outcome from retained transcript receipt admission."""
+
+    model_config = _STRICT_FROZEN
+
+    transcript_id: int
+    document_id: int
+    ticker: str
+    period_end: str
+    fiscal_period_type: str
+    file_path: str
+    status: str
+    provider: str | None = None
+    receipt_id: str | None = None
+
+
+class RetainedTranscriptAdmissionReport(BaseModel):
+    """Summary of dry-run or applied retained transcript receipt admission."""
+
+    model_config = _STRICT_FROZEN
+
+    apply: bool
+    as_of: date
+    scanned: int
+    already_bound: int
+    eligible: int
+    admitted: int
+    skipped_counts: dict[str, int]
+    items: tuple[RetainedTranscriptAdmissionItem, ...]
+
+
+def _resolve_transcript_fiscal_coordinate(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fiscal_period_type: str,
+    period_end_raw: object,
+) -> tuple[int, int] | None:
+    """Resolve exact ``(fiscal_year, fiscal_quarter)`` matching ``fiscal_quarter_period_end``."""
+    quarter_text = fiscal_period_type.strip().upper()
+    if len(quarter_text) != 2 or not quarter_text.startswith("Q") or not quarter_text[1].isdigit():
+        return None
+    fiscal_quarter = int(quarter_text[1])
+    if not 1 <= fiscal_quarter <= 4:
+        return None
+    raw_pe = str(period_end_raw or "").strip()
+    if len(raw_pe) < 10:
+        return None
+    try:
+        pe_date = date.fromisoformat(raw_pe[:10])
+    except ValueError:
+        return None
+    row = conn.execute(
+        "SELECT fiscal_year_end FROM tracked_companies "
+        "WHERE UPPER(ticker)=? AND archived_at IS NULL LIMIT 1",
+        (ticker.upper(),),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    fye_str = str(row[0]).strip()
+    if len(fye_str) != 5 or fye_str[2] != "-" or not fye_str[:2].isdigit():
+        return None
+    fye_month = int(fye_str[:2])
+    if not 1 <= fye_month <= 12:
+        return None
+    for fy in (pe_date.year - 1, pe_date.year, pe_date.year + 1):
+        try:
+            expected = fiscal_quarter_period_end(fy, fiscal_quarter, fye_month)
+        except ValueError:
+            continue
+        if expected == pe_date:
+            return (fy, fiscal_quarter)
+    return None
+
+
+def _safe_retained_file_path(
+    project_root: Path, relative_raw: str
+) -> tuple[Path, PurePosixPath] | None:
+    """Validate and resolve a repo-relative file path without symlink escape."""
+    rel_posix = PurePosixPath(relative_raw.replace("\\", "/"))
+    if rel_posix.is_absolute() or ".." in rel_posix.parts or not rel_posix.parts:
+        return None
+    root = project_root.resolve(strict=True)
+    lexical = root.joinpath(*rel_posix.parts)
+    current = lexical
+    while True:
+        try:
+            attributes = getattr(current.lstat(), "st_file_attributes", 0)
+        except OSError:
+            return None
+        if current.is_symlink() or (isinstance(attributes, int) and bool(attributes & 0x400)):
+            return None
+        if current == root:
+            break
+        if root not in current.parents:
+            return None
+        current = current.parent
+    try:
+        resolved = lexical.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if not resolved.is_file():
+        return None
+    return (resolved, rel_posix)
+
+
+def admit_retained_transcripts(
+    conn: sqlite3.Connection,
+    *,
+    project_root: Path,
+    private_root: Path,
+    tickers: Sequence[str] | None = None,
+    transcript_ids: Sequence[int] | None = None,
+    as_of: date | None = None,
+    apply: bool = False,
+) -> RetainedTranscriptAdmissionReport:
+    """Verify retained on-disk transcript bytes and persist durable acquisition receipts.
+
+    Fails closed when on-disk files are missing, symlink-escaped, size-mismatched,
+    hash-mismatched, or outside tracked portfolio/requested authorization policy.
+    """
+    from pipeline.commitment_scan_receipts import current_transcript_scan_binding
+
+    effective_as_of = as_of or current_utc_date()
+    resolved_root = project_root.resolve(strict=True)
+    relation = selected_transcripts_relation(conn).sql
+    sql = (
+        "SELECT t.id AS transcript_id, t.document_id, UPPER(t.ticker) AS ticker, "
+        "t.fiscal_period_type, t.period_end, d.source_type, d.doc_type, d.file_path, "
+        "d.sha256, d.raw_bytes_size, d.source_url "
+        f"FROM {relation} AS t "  # nosec B608 -- repository-owned selection relation
+        "JOIN documents AS d ON d.id = t.document_id "
+        "WHERE t.is_current = 1 "
+        "AND EXISTS (SELECT 1 FROM transcript_segments AS s WHERE s.transcript_id = t.id)"
+    )
+    params: list[object] = []
+    if tickers:
+        normalized_tickers = tuple(dict.fromkeys(t.strip().upper() for t in tickers if t.strip()))
+        if normalized_tickers:
+            placeholders = ",".join("?" for _ in normalized_tickers)
+            sql += f" AND UPPER(t.ticker) IN ({placeholders})"  # nosec B608
+            params.extend(normalized_tickers)
+    if transcript_ids:
+        unique_ids = tuple(dict.fromkeys(int(tid) for tid in transcript_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        sql += f" AND t.id IN ({placeholders})"  # nosec B608
+        params.extend(unique_ids)
+    sql += " ORDER BY UPPER(t.ticker), t.period_end DESC, t.id"
+    rows = conn.execute(sql, params).fetchall()
+
+    items: list[RetainedTranscriptAdmissionItem] = []
+    already_bound = 0
+    eligible = 0
+    admitted = 0
+    skipped_counts: dict[str, int] = {}
+
+    def _record_skip(
+        row: sqlite3.Row,
+        status: str,
+        *,
+        provider: str | None = None,
+    ) -> None:
+        skipped_counts[status] = skipped_counts.get(status, 0) + 1
+        items.append(
+            RetainedTranscriptAdmissionItem(
+                transcript_id=int(row["transcript_id"]),
+                document_id=int(row["document_id"]),
+                ticker=str(row["ticker"]),
+                period_end=str(row["period_end"] or ""),
+                fiscal_period_type=str(row["fiscal_period_type"] or ""),
+                file_path=str(row["file_path"] or ""),
+                status=status,
+                provider=provider,
+            )
+        )
+
+    for row in rows:
+        transcript_id = int(row["transcript_id"])
+        document_id = int(row["document_id"])
+        ticker = str(row["ticker"]).upper()
+        period_end_str = str(row["period_end"] or "")
+        fiscal_period_type = str(row["fiscal_period_type"] or "")
+        file_path_raw = str(row["file_path"] or "")
+        expected_sha256 = str(row["sha256"] or "")
+        expected_size = int(row["raw_bytes_size"] or 0)
+        doc_source_type = str(row["source_type"] or "")
+        doc_type = str(row["doc_type"] or "")
+        doc_source_url = None if row["source_url"] is None else str(row["source_url"])
+
+        existing_binding = current_transcript_scan_binding(conn, transcript_id)
+        if existing_binding is not None:
+            already_bound += 1
+            items.append(
+                RetainedTranscriptAdmissionItem(
+                    transcript_id=transcript_id,
+                    document_id=document_id,
+                    ticker=ticker,
+                    period_end=period_end_str,
+                    fiscal_period_type=fiscal_period_type,
+                    file_path=file_path_raw,
+                    status="already_bound",
+                    receipt_id=existing_binding.transcript_acquisition_receipt_id,
+                )
+            )
+            continue
+
+        resolved_pair = _safe_retained_file_path(resolved_root, file_path_raw)
+        if resolved_pair is None:
+            _record_skip(row, "artifact_missing_or_unsafe")
+            continue
+        disk_path, rel_posix = resolved_pair
+        disk_bytes = disk_path.read_bytes()
+        if len(disk_bytes) != expected_size:
+            _record_skip(row, "artifact_size_mismatch")
+            continue
+        if hashlib.sha256(disk_bytes).hexdigest() != expected_sha256:
+            _record_skip(row, "artifact_hash_mismatch")
+            continue
+
+        coord = _resolve_transcript_fiscal_coordinate(
+            conn,
+            ticker=ticker,
+            fiscal_period_type=fiscal_period_type,
+            period_end_raw=row["period_end"],
+        )
+        if coord is None:
+            _record_skip(row, "period_coordinate_unresolved")
+            continue
+        fiscal_year, fiscal_quarter = coord
+        expected_txt_name = f"{ticker}_Q{fiscal_quarter}_{fiscal_year}.txt"
+
+        if doc_source_type == SourceType.IR_DOC.value and doc_type == DocType.IR_TRANSCRIPT.value:
+            is_issuer = is_canonical_issuer_transcript_path(rel_posix, ticker)
+            is_named = rel_posix.name == expected_txt_name
+            if not (is_issuer or is_named):
+                _record_skip(row, "noncanonical_issuer_path")
+                continue
+            provider = TranscriptProvider.ISSUER_IR
+            request = TranscriptAcquisitionRequest(
+                schema_version="transcript-acquisition-request@2",
+                entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
+                canonical_ticker=ticker,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
+                as_of=effective_as_of,
+                source_type=SourceType.IR_DOC,
+                document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+                provider=provider,
+                owner_requested=True,
+                existing_artifact=False,
+                existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+                source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+                source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+            )
+            authorization = authorize_transcript_request(conn, request)
+            if authorization.status is not TranscriptAuthorizationStatus.AUTHORIZED:
+                _record_skip(row, f"denied:{authorization.reason.value}", provider=provider.value)
+                continue
+            if not apply:
+                eligible += 1
+                items.append(
+                    RetainedTranscriptAdmissionItem(
+                        transcript_id=transcript_id,
+                        document_id=document_id,
+                        ticker=ticker,
+                        period_end=period_end_str,
+                        fiscal_period_type=fiscal_period_type,
+                        file_path=file_path_raw,
+                        status="eligible",
+                        provider=provider.value,
+                    )
+                )
+                continue
+            savepoint = f"admit_retained_{transcript_id}"
+            conn.execute(f"SAVEPOINT {savepoint}")  # nosec B608 -- integer transcript_id
+            try:
+                private_root.mkdir(parents=True, exist_ok=True)
+                artifact = _stage_authorized_file(
+                    authorization,
+                    source_path=disk_path,
+                    private_root=private_root,
+                    expected_sha256=expected_sha256,
+                    expected_size_bytes=expected_size,
+                    source_url=doc_source_url,
+                    canonical_document_path=Path(rel_posix.as_posix()),
+                    document_id=document_id,
+                )
+                receipt_id = persist_authorized_transcript_artifact(
+                    conn,
+                    artifact,
+                    project_root=resolved_root,
+                    trusted_staging_root=private_root,
+                )
+                if current_transcript_scan_binding(conn, transcript_id) is None:
+                    raise TranscriptAcquisitionDeniedError(
+                        f"transcript {transcript_id} failed post-admission scan binding verification"
+                    )
+            except (OSError, ValueError, sqlite3.Error, TranscriptAcquisitionDeniedError) as exc:
+                conn.execute(f"ROLLBACK TO {savepoint}")  # nosec B608
+                conn.execute(f"RELEASE {savepoint}")  # nosec B608
+                _record_skip(row, f"error:{type(exc).__name__}", provider=provider.value)
+                continue
+            conn.execute(f"RELEASE {savepoint}")  # nosec B608
+            eligible += 1
+            admitted += 1
+            items.append(
+                RetainedTranscriptAdmissionItem(
+                    transcript_id=transcript_id,
+                    document_id=document_id,
+                    ticker=ticker,
+                    period_end=period_end_str,
+                    fiscal_period_type=fiscal_period_type,
+                    file_path=file_path_raw,
+                    status="admitted",
+                    provider=provider.value,
+                    receipt_id=receipt_id,
+                )
+            )
+            continue
+
+        if doc_source_type == SourceType.TRANSCRIPT_AUDIO.value and doc_source_url is None:
+            parsed_name = parse_canonical_transcript_filename(rel_posix)
+            allowed_parents = {
+                PurePosixPath("transcripts/raw"),
+                PurePosixPath("transcripts/processed"),
+                PurePosixPath("transcripts/raw/.evidence") / expected_sha256,
+            }
+            if (
+                parsed_name != (ticker, fiscal_year, fiscal_quarter)
+                or rel_posix.parent not in allowed_parents
+            ):
+                _record_skip(row, "noncanonical_aggregator_path")
+                continue
+            provider = TranscriptProvider.ROIC
+            request = TranscriptAcquisitionRequest(
+                schema_version="transcript-acquisition-request@2",
+                entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
+                canonical_ticker=ticker,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
+                as_of=effective_as_of,
+                source_type=SourceType.IR_DOC,
+                document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+                provider=provider,
+                owner_requested=True,
+                existing_artifact=False,
+                existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+                source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+                source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+            )
+            authorization = authorize_transcript_request(conn, request)
+            if authorization.status is not TranscriptAuthorizationStatus.AUTHORIZED:
+                _record_skip(row, f"denied:{authorization.reason.value}", provider=provider.value)
+                continue
+            if not apply:
+                eligible += 1
+                items.append(
+                    RetainedTranscriptAdmissionItem(
+                        transcript_id=transcript_id,
+                        document_id=document_id,
+                        ticker=ticker,
+                        period_end=period_end_str,
+                        fiscal_period_type=fiscal_period_type,
+                        file_path=file_path_raw,
+                        status="eligible",
+                        provider=provider.value,
+                    )
+                )
+                continue
+            savepoint = f"admit_retained_{transcript_id}"
+            conn.execute(f"SAVEPOINT {savepoint}")  # nosec B608 -- integer transcript_id
+            try:
+                private_root.mkdir(parents=True, exist_ok=True)
+                artifact = stage_authorized_payload(
+                    authorization,
+                    payload=disk_bytes,
+                    private_root=private_root,
+                    source_url=None,
+                    canonical_document_path=Path("transcripts/raw") / expected_txt_name,
+                )
+                receipt_id = persist_authorized_transcript_artifact(
+                    conn,
+                    artifact,
+                    project_root=resolved_root,
+                    trusted_staging_root=private_root,
+                )
+                if current_transcript_scan_binding(conn, transcript_id) is None:
+                    raise TranscriptAcquisitionDeniedError(
+                        f"transcript {transcript_id} failed post-admission scan binding verification"
+                    )
+            except (OSError, ValueError, sqlite3.Error, TranscriptAcquisitionDeniedError) as exc:
+                conn.execute(f"ROLLBACK TO {savepoint}")  # nosec B608
+                conn.execute(f"RELEASE {savepoint}")  # nosec B608
+                _record_skip(row, f"error:{type(exc).__name__}", provider=provider.value)
+                continue
+            conn.execute(f"RELEASE {savepoint}")  # nosec B608
+            eligible += 1
+            admitted += 1
+            items.append(
+                RetainedTranscriptAdmissionItem(
+                    transcript_id=transcript_id,
+                    document_id=document_id,
+                    ticker=ticker,
+                    period_end=period_end_str,
+                    fiscal_period_type=fiscal_period_type,
+                    file_path=file_path_raw,
+                    status="admitted",
+                    provider=provider.value,
+                    receipt_id=receipt_id,
+                )
+            )
+            continue
+
+        _record_skip(row, "unsupported_source_metadata")
+
+    if apply and admitted > 0:
+        conn.commit()
+    return RetainedTranscriptAdmissionReport(
+        apply=apply,
+        as_of=effective_as_of,
+        scanned=len(rows),
+        already_bound=already_bound,
+        eligible=eligible,
+        admitted=admitted,
+        skipped_counts=dict(sorted(skipped_counts.items())),
+        items=tuple(items),
+    )
+
+
 __all__ = [
     "COMBINED_SOURCE_REGIME_IDENTITY",
     "AuthorizedTranscriptArtifact",
+    "RetainedTranscriptAdmissionItem",
+    "RetainedTranscriptAdmissionReport",
     "TranscriptAcquisitionDeniedError",
+    "admit_retained_transcripts",
     "authorize_transcript_request",
     "issuer_transcript_source_url_is_authorized",
     "load_authorized_transcript_receipt",

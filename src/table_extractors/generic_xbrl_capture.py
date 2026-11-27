@@ -243,6 +243,8 @@ def extract(
                     primary_source=SourceType.SEC_XBRL,
                     extracted_by=EXTRACTED_BY,
                     origin=DefinitionOrigin.CAPTURE,
+                    auto_admit=True,
+                    reviewed_by=f"deterministic:{EXTRACTED_BY}",
                     values=values,
                 )
                 result = persist_manifest(conn, run_id=run_id, manifest=manifest)

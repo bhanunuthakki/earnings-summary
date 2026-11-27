@@ -8,8 +8,10 @@ module does not activate transcript acquisition or authorize any side effect.
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import date
 from enum import StrEnum
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
@@ -58,6 +60,79 @@ _CanonicalTicker = Annotated[
 TRANSCRIPT_ACQUISITION_POLICY_VERSION = POLICY_VERSION
 TranscriptSourcePolicyVersion = Literal["2026-08-12.2", "2026-09-19.1"]
 _MAX_REPORTED_QUARTERS = 5
+_CANONICAL_TRANSCRIPT_STEM_RE = re.compile(
+    r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})$"
+)
+
+
+def is_canonical_issuer_transcript_path(
+    relative: Path | PurePosixPath | str,
+    canonical_ticker: str,
+) -> bool:
+    """Return True iff ``relative`` is a safe repo-relative ``ir_documents/<TICKER>/...`` path."""
+    path = PurePosixPath(str(relative).replace("\\", "/"))
+    if path.is_absolute() or ".." in path.parts or len(path.parts) < 3:
+        return False
+    return (
+        path.parts[0] == "ir_documents"
+        and path.parts[1].upper() == canonical_ticker.strip().upper()
+        and bool(path.name)
+    )
+
+
+def parse_canonical_transcript_filename(
+    relative: Path | PurePosixPath | str,
+) -> tuple[str, int, int] | None:
+    """Parse ``<TICKER>_Q<quarter>_<year>.txt`` -> ``(ticker, fiscal_year, fiscal_quarter)``."""
+    path = PurePosixPath(str(relative).replace("\\", "/"))
+    if path.suffix.lower() != ".txt":
+        return None
+    match = _CANONICAL_TRANSCRIPT_STEM_RE.fullmatch(path.stem)
+    if match is None:
+        return None
+    return (
+        match.group("ticker").upper(),
+        int(match.group("year")),
+        int(match.group("quarter")),
+    )
+
+
+def is_canonical_transcript_file_path(
+    relative: Path | PurePosixPath | str,
+    *,
+    canonical_ticker: str,
+    fiscal_year: int | None = None,
+    fiscal_quarter: int | None = None,
+    sha256: str | None = None,
+) -> bool:
+    """Return True iff ``relative`` matches one of the four canonical transcript layouts."""
+    path = PurePosixPath(str(relative).replace("\\", "/"))
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        return False
+    ticker_upper = canonical_ticker.strip().upper()
+    if is_canonical_issuer_transcript_path(path, ticker_upper):
+        return True
+    parsed = parse_canonical_transcript_filename(path)
+    if parsed is None:
+        return False
+    file_ticker, file_year, file_quarter = parsed
+    if file_ticker != ticker_upper:
+        return False
+    if fiscal_year is not None and file_year != fiscal_year:
+        return False
+    if fiscal_quarter is not None and file_quarter != fiscal_quarter:
+        return False
+    parent = path.parent
+    if parent in {PurePosixPath("transcripts/processed"), PurePosixPath("transcripts/raw")}:
+        return True
+    if sha256 is not None and parent == PurePosixPath("transcripts/raw/.evidence") / sha256:
+        return True
+    return (
+        sha256 is None
+        and len(path.parts) == 5
+        and path.parts[:3] == ("transcripts", "raw", ".evidence")
+        and bool(re.fullmatch(r"[0-9a-f]{64}", path.parts[3]))
+    )
 
 
 class TranscriptAcquisitionEntrypoint(StrEnum):

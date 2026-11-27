@@ -277,7 +277,16 @@ def build_atomic_semantic_context(
     if metric_nature is KpiMetricNature.REPORTED_SCALAR:
         if not isinstance(locator, FactLocator):
             raise ValueError("reported_scalar atomic admission requires a concrete FactLocator")
-        if locator.effective_kind() is not LocatorKind.DERIVED and excerpt is None:
+        structured_deterministic = (
+            extracted_by in DETERMINISTIC_ADMITTABLE_EXTRACTORS
+            and locator.effective_kind()
+            in {LocatorKind.DERIVED, LocatorKind.FMP_JSON_TABLE, LocatorKind.SPREADSHEET_CELL}
+        )
+        if (
+            not structured_deterministic
+            and locator.effective_kind() is not LocatorKind.DERIVED
+            and excerpt is None
+        ):
             raise ValueError("reported_scalar atomic admission requires non-empty source_excerpt")
     elif metric_nature is KpiMetricNature.INFERRED_EXTRAPOLATED:
         if note is None and excerpt is None:
