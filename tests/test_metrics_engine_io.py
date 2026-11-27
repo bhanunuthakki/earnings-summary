@@ -10,7 +10,6 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
-from contextlib import closing
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -19,7 +18,6 @@ from unittest.mock import patch
 
 import pytest
 
-import db as dbmod
 from compute.metrics_engine import io as metrics_io
 from compute.metrics_engine.engine import ComputedValue
 from compute.metrics_engine.inputs import CanonicalConcept
@@ -39,34 +37,15 @@ from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.financial_fact_resolution import resolve_fact_row
 from sources.price import LivePrice
 
-_PRE_CUTOVER_REVISION = "0224_expected_document_lifecycle"
-
-
-def _bootstrap_pre_alembic_database(database: Path) -> None:
-    """Use the original bootstrap owner with an explicit disposable connection."""
-    checkout_database = Path(dbmod.PROJECT_ROOT) / "data" / "portfolio.db"
-    assert not checkout_database.exists()
-    original_paths = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR, dbmod.STATE_ROOT)
-    c = sqlite3.connect(database)
-    c.row_factory = sqlite3.Row
-    try:
-        # init_db predates path injection. Replace only its connection boundary;
-        # never rebind the module's configured database or state paths.
-        with patch.object(dbmod, "get_connection", return_value=c) as open_database:
-            dbmod.init_db()
-            open_database.assert_called_once_with(allow_create=True)
-    finally:
-        c.close()
-        assert original_paths == (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR, dbmod.STATE_ROOT)
-        assert not checkout_database.exists()
-    with closing(sqlite3.connect(database)) as verified:
-        tables = {
-            row[0]
-            for row in verified.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-        }
-        assert tables == {"tracked_companies", "quarterly_artifacts", "fmp_endpoint_status"}
+_PRE_CUTOVER_TRIGGERS = (
+    "trg_fact_observation_match_proofs_validate",
+    "trg_fact_observation_revisions_append_only",
+    "trg_fact_observation_revisions_append_only_delete",
+    "trg_financial_facts_observation_insert",
+    "trg_financial_facts_observation_update",
+    "trg_kpi_facts_observation_insert",
+    "trg_kpi_facts_observation_update",
+)
 
 
 @pytest.fixture
@@ -76,30 +55,22 @@ def conn(
     request: pytest.FixtureRequest,
 ) -> Iterator[sqlite3.Connection]:
     historical = getattr(request, "param", None) == "pre_cutover_valuation"
-    database = (
-        migrated_db(
-            tmp_path / "metrics.sqlite",
-            archived=True,
-            upgrade_from="0000_baseline",
-            before_upgrade=_bootstrap_pre_alembic_database,
-            seed_sha256=hashlib.sha256(Path(dbmod.__file__).read_bytes()).hexdigest(),
-            target=_PRE_CUTOVER_REVISION,
-        )
-        if historical
-        else migrated_db(tmp_path / "metrics.sqlite")
-    )
+    database = migrated_db(tmp_path / "metrics.sqlite")
     c = sqlite3.connect(database)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
     try:
+        if historical:
+            for trigger_name in _PRE_CUTOVER_TRIGGERS:
+                c.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+            c.execute("DROP VIEW IF EXISTS v_financial_facts_resolved_current")
+            c.execute("DROP VIEW IF EXISTS v_kpi_facts_resolved_current")
+            c.execute("DROP TABLE fact_observation_revisions")
+            c.commit()
         cutover = c.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_observation_revisions'"
         ).fetchone()
         assert (cutover is None) is historical
-        if historical:
-            assert c.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
-                _PRE_CUTOVER_REVISION
-            )
         yield c
     finally:
         c.close()

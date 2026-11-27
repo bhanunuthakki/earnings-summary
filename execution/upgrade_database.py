@@ -27,6 +27,8 @@ from alembic.script import ScriptDirectory
 from alembic.util.exc import CommandError
 from backup_restore_readiness_receipt import (
     BackupRestoreReadinessReceipt,
+    evidence_id_is_valid,
+    validate_receipt_binding_metadata,
     validate_receipt_for_source,
 )
 from pydantic import BaseModel, ConfigDict
@@ -37,11 +39,13 @@ from alembic import command
 from run_lock import hold_run_lock
 from runtime.job_runtime import portfolio_db_path
 from schema_compat import expected_head
+from sqlite_freshness import SQLiteFileToken, sqlite_file_token
 from sqlite_runtime import (
     SQLiteConnectionRole,
     connect_sqlite,
     require_safe_sqlite_writer_runtime,
 )
+from sqlite_snapshot import apply_verification_pragmas
 
 ACTIVE_HEAD = expected_head()
 _HERO_REVISION = "0060_bulk_lexical_projection_coverage"
@@ -183,6 +187,7 @@ def _user_tables(db_path: Path) -> set[str]:
 def _integrity_check(db_path: Path) -> None:
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
+        apply_verification_pragmas(conn)
         result = conn.execute("PRAGMA integrity_check").fetchone()
         foreign_key_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     finally:
@@ -207,6 +212,7 @@ def _backup_database(db_path: Path, backup_path: Path) -> None:
         schema_preflight=False,
     )
     try:
+        destination.execute("PRAGMA cache_size = -65536")
         source.backup(destination)
     finally:
         destination.close()
@@ -348,6 +354,7 @@ def _reuse_phase0_backup(
     source_revision: str,
     readiness_evidence_id: str | None,
     readiness_receipt_path: str | None,
+    locked_source_token: SQLiteFileToken | None = None,
 ) -> tuple[Path, str]:
     """Re-prove the exact locked readiness snapshot; never accept an arbitrary backup."""
     try:
@@ -355,11 +362,25 @@ def _reuse_phase0_backup(
     except (OSError, ValueError) as exc:
         raise UpgradeDatabaseError("Phase-0 backup reuse receipt is invalid") from exc
     if (
-        readiness_evidence_id != receipt.evidence_id
+        not evidence_id_is_valid(receipt)
+        or readiness_evidence_id != receipt.evidence_id
         or readiness_receipt_path is None
         or Path(readiness_receipt_path).resolve() != receipt_path.resolve()
     ):
         raise UpgradeDatabaseError("Phase-0 backup reuse differs from locked readiness evidence")
+
+    # When locked migration readiness just emitted a genuine, commitment-sealed
+    # PortfolioReadinessReceipt inside this exact hold_run_lock, avoid running
+    # a second multi-gigabyte source/snapshot pass as long as O(1) binding
+    # metadata and the source file token remain unchanged.
+    if (
+        locked_source_token is not None
+        and receipt.source_db_revision == source_revision
+        and sqlite_file_token(db_path) == locked_source_token
+        and not validate_receipt_binding_metadata(receipt, source_db=db_path)
+    ):
+        return Path(receipt.snapshot_resolved_path).resolve(), receipt.evidence_id
+
     reasons = validate_receipt_for_source(
         receipt,
         source_db=db_path,
@@ -429,6 +450,7 @@ def upgrade_database(
     with hold_run_lock(db_path, owner="upgrade_database", timeout_s=30.0):
         existed = db_path.exists()
         readiness = None
+        locked_source_token: SQLiteFileToken | None = None
         if existed and live_database and phase0_backup_restore_receipt is not None:
             if origin_observation is None:
                 raise UpgradeDatabaseError("live portfolio DB origin evidence is unavailable")
@@ -462,6 +484,8 @@ def upgrade_database(
                 raise UpgradeDatabaseError(
                     "live portfolio DB migration preconditions did not establish a revision"
                 )
+            if readiness_module.is_verified_migration_readiness(readiness, db_path=db_path):
+                locked_source_token = sqlite_file_token(db_path)
             initial = (readiness.db_revision,)
         else:
             # Revision/schema classification and the mutation it authorizes
@@ -516,6 +540,7 @@ def upgrade_database(
                 source_revision=from_revision,
                 readiness_evidence_id=readiness.backup_restore_evidence_id,
                 readiness_receipt_path=readiness.backup_restore_receipt_path,
+                locked_source_token=locked_source_token,
             )
         elif chosen_backup is not None:
             _backup_database(db_path, chosen_backup)

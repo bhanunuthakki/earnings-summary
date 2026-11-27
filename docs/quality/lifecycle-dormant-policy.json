@@ -1,9 +1,0 @@
-{
-  "schema_version": "operational-lifecycle-dormant-policy/v1",
-  "owner_evidence": "linear:BHA-142",
-  "authorization_evidence": "BHA-142 owner mandate: unlinked operational surfaces stay dormant until explicit activation.",
-  "activation_evidence": "explicit-owner-invocation-or-registration",
-  "review_on": "2027-12-31",
-  "path_prefixes": [".github/", "cron/", "execution/", "scripts/", "src/"],
-  "exact_paths": ["Makefile", ".githooks/test_pre_push.sh", "build_report.bat", "process_comments.bat", "refresh_fmp.bat", "refresh_news.bat", "refresh_transcripts.bat", "start_comments_server.bat", "tests/native/filing_xbrl_label_checks.ps1"]
-}

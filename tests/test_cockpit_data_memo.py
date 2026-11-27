@@ -43,18 +43,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import comments_server
-import comments_server_cockpit_memo as memo_module
-import comments_server_context
-import comments_server_panel_cache as panel_cache_module
-from comments_server_cockpit_memo import (
+
+import cockpit.cockpit_memo as memo_module
+import cockpit.panel_cache as panel_cache_module
+from cockpit import context
+from cockpit.cockpit_memo import (
     CockpitDataBusy,
     CockpitDataHit,
     CockpitDataMemo,
     CockpitDataReservation,
     cockpit_data_memo_key,
 )
-from comments_server_panel_cache import PanelCacheEntry, PanelResponseCache
-
+from cockpit.panel_cache import PanelCacheEntry, PanelResponseCache
 from pipeline.research_cockpit import build_cockpit_rows
 from tests.comments_server_seams import patch_server_seam
 
@@ -369,7 +369,7 @@ def test_build_failure_never_poisons_the_memo(
 ) -> None:
     """A raising build propagates (unchanged semantics) and leaves the memo
     empty; the next request rebuilds and publishes."""
-    real_build = comments_server_context.build_cockpit_rows
+    real_build = context.build_cockpit_rows
 
     def exploding_build(conn: sqlite3.Connection, repo_root: Path) -> dict[str, list[Any]]:
         build_calls.append(1)
@@ -559,7 +559,7 @@ def test_slow_cold_build_cannot_receive_a_new_response_cache_lifetime(
 ) -> None:
     clock = [10.0]
     timer = SimpleNamespace(monotonic=lambda: clock[0])
-    for module in (memo_module, panel_cache_module, comments_server_context):
+    for module in (memo_module, panel_cache_module, context):
         monkeypatch.setattr(module, "time", timer)
     calls: list[int] = []
 
@@ -579,13 +579,12 @@ def test_slow_cold_build_cannot_receive_a_new_response_cache_lifetime(
 def test_slow_tracker_cannot_extend_portfolio_research_freshness(
     client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import comments_server_work_os_routes
-
+    from cockpit import work_os_routes
     from integrations.portfolio_tracker_client import LivePortfolio
 
     clock = [10.0]
     timer = SimpleNamespace(monotonic=lambda: clock[0])
-    for module in (panel_cache_module, comments_server_work_os_routes):
+    for module in (panel_cache_module, work_os_routes):
         monkeypatch.setattr(module, "time", timer, raising=False)
     calls: list[int] = []
 

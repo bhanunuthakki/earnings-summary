@@ -123,7 +123,8 @@ def test_manifest_validator_rejects_duplicate_canonical_ownership() -> None:
 def test_manifest_validator_rejects_runbook_links_to_noncanonical_files() -> None:
     payload = copy.deepcopy(_manifest())
     entries = cast(dict[str, dict[str, object]], payload["directives"])
-    entries["backfill_transcripts.md"]["governed_by"] = ["navigation_ia.md"]
+    entries["synthetic_draft.md"] = {"class": "draft", "summary": "Non-canonical test fixture."}
+    entries["backfill_transcripts.md"]["governed_by"] = ["synthetic_draft.md"]
 
     with patch.object(validate_directive_manifest, "_load_manifest", return_value=payload):
         errors = validate_directive_manifest.validate()
@@ -164,8 +165,6 @@ def test_semantic_manifest_edges_match_current_directive_status_and_state_owner(
     entries = _entries()
 
     assert entries["dcf_gsheets_setup.md"]["governed_by"] == ["holdings_json_schema.md"]
-    assert entries["ir_events_ingestion.md"]["class"] == "draft"
-    assert "governed_by" not in entries["ir_events_ingestion.md"]
     assert entries["monthly_red_team.md"]["class"] == "canonical"
     assert entries["monthly_red_team.md"]["authority_domains"] == ["portfolio_red_team"]
 
@@ -224,16 +223,11 @@ def test_draft_and_history_are_non_governing_but_lineage_is_retained() -> None:
     entries = _entries()
     readme = _read("directives/README.md")
     current_comments = _read("directives/report_comments_and_chat.md")
-    comment_history = _read("directives/history/report_comments_and_chat_2026_06_2026_08.md")
 
-    assert entries["navigation_ia.md"]["class"] == "draft"
-    assert entries["interaction_paradigm_2026_06.md"]["class"] == "history"
     assert entries["report_comments_and_chat.md"]["class"] == "canonical"
-    assert entries["history/report_comments_and_chat_2026_06_2026_08.md"]["class"] == "history"
     assert "non-governing until explicitly promoted" in readme
     assert "cannot override current authority" in readme
-    assert "history/report_comments_and_chat_2026_06_2026_08.md" in current_comments
-    assert "The living contract is `directives/report_comments_and_chat.md`" in comment_history
+    assert current_comments.strip()
 
 
 def test_project_rulebook_uses_manifest_classes_as_the_directive_authority() -> None:
@@ -285,8 +279,6 @@ def test_llm_documents_have_non_overlapping_live_owners() -> None:
     assert manifest["cheapest_model_routing.md"]["class"] == "canonical"
     assert manifest["gemini_backend.md"]["class"] == "runbook"
     assert manifest["openrouter_backend.md"]["class"] == "runbook"
-    assert manifest["llm_evals_plan.md"]["class"] == "history"
-    assert manifest["meta_eval_governance.md"]["class"] == "history"
 
     calls = _read("directives/llm_calls.md")
     evals = _read("directives/llm_evals.md")

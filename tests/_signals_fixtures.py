@@ -1,14 +1,4 @@
-"""Shared helpers for the `signals` substrate tests (alembic 0095 + 0101).
-
-The fast path: stamp a tmp DB at the prior head, hand-create the minimal `news`
-table (verbatim 0065 schema) so the backfill has something to mirror, then run
-up to the signals head. ``SIGNALS_HEAD`` tracks the LATEST migration that shapes
-`signals` (0101 widened the signal_type CHECK with `media_appearance`), so the
-lockstep test sees the current schema; the intervening discovery migrations
-(0096–0100) are table-absence-guarded and no-op on this minimal schema. Keeps
-the store / migration / panel tests hermetic without the full chain (the
-diet-guard test needs the whole inbox schema and builds it separately).
-"""
+"""Shared helpers for the minimal `signals` substrate tests."""
 
 from __future__ import annotations
 
@@ -16,17 +6,11 @@ import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
 
-from alembic.config import Config
+from signals.store import sync_news_to_signals
 
-from alembic import command
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIOR_HEAD = "0094_validation_issue_resolution"
-SIGNALS_HEAD = "0102_signals_media_appearance"
-
-# Verbatim 0065_news schema — the backfill SELECTs these columns.
+# Verbatim 0065_news schema — sync_news_to_signals SELECTs these columns.
 _NEWS_DDL = """
-CREATE TABLE news (
+CREATE TABLE IF NOT EXISTS news (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,
     headline TEXT NOT NULL,
@@ -36,25 +20,57 @@ CREATE TABLE news (
     source TEXT,
     source_feed TEXT NOT NULL DEFAULT 'fmp_stock_news',
     fetched_at TEXT NOT NULL
-)
+);
+"""
+
+# Matches the consolidated 0001_initial_schema signals table and indexes without
+# pulling unrelated tables (such as tracked_companies or ir_event_revisions).
+_SIGNALS_DDL = """
+CREATE TABLE IF NOT EXISTS signals (
+    id INTEGER NOT NULL,
+    ticker TEXT NOT NULL,
+    signal_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT,
+    url TEXT,
+    firm TEXT,
+    event_date TEXT(10),
+    published_at TEXT NOT NULL,
+    weight FLOAT DEFAULT (1.0) NOT NULL,
+    cadence TEXT DEFAULT 'event' NOT NULL,
+    source_feed TEXT,
+    news_id INTEGER,
+    created_at TEXT NOT NULL,
+    quality_score FLOAT,
+    PRIMARY KEY (id),
+    CONSTRAINT ck_signals_signal_type CHECK (signal_type IN (
+        'buyside_rating',
+        'consensus_rating',
+        'estimate_revision',
+        'general_news',
+        'investor_day',
+        'media_appearance'
+    )),
+    CONSTRAINT ck_signals_cadence CHECK (cadence IN ('event', 'quarterly', 'scheduled'))
+);
+CREATE INDEX IF NOT EXISTS ix_signals_event_date
+    ON signals (event_date) WHERE event_date IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_signals_ticker_type_date
+    ON signals (ticker, signal_type, published_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_signals_event
+    ON signals (ticker, signal_type, event_date) WHERE event_date IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_signals_media_url
+    ON signals (ticker, url) WHERE signal_type = 'media_appearance' AND url IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_signals_news_id
+    ON signals (news_id) WHERE news_id IS NOT NULL;
 """
 
 
-def build_config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 def make_news_then_signals(db_path: Path, news_rows: Sequence[tuple[str | None, ...]]) -> None:
-    """Create `news` with ``news_rows`` at the prior-head stamp, then run 0095
-    so the migration backfills them. Each row is
-    (ticker, headline, url, published_at, snippet, source, source_feed, fetched_at).
-    """
+    """Create minimal `news` and `signals` schemas, insert rows, and mirror them."""
     conn = sqlite3.connect(str(db_path))
     try:
-        conn.execute(_NEWS_DDL)
+        conn.executescript(_NEWS_DDL + "\n" + _SIGNALS_DDL)
         conn.executemany(
             "INSERT INTO news "
             "(ticker, headline, url, published_at, snippet, source, source_feed, fetched_at) "
@@ -62,15 +78,16 @@ def make_news_then_signals(db_path: Path, news_rows: Sequence[tuple[str | None, 
             news_rows,
         )
         conn.commit()
+        sync_news_to_signals(conn)
     finally:
         conn.close()
-    cfg = build_config(db_path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, SIGNALS_HEAD)
 
 
 def signals_only(db_path: Path) -> None:
-    """Stamp prior head + run 0095 with NO `news` table — an empty `signals`."""
-    cfg = build_config(db_path)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, SIGNALS_HEAD)
+    """Create minimal `signals` schema with no `news` table."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(_SIGNALS_DDL)
+        conn.commit()
+    finally:
+        conn.close()

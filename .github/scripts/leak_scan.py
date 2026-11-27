@@ -25,15 +25,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import cast
 
-SCHEMA = "secret-scan-clean-blobs/v1"
+SCHEMA = "secret-scan-clean-blobs/v3"
 FILTER_FILE = Path(".github/scripts/quality_hash_filter.py")
 # Canonical evidence hash fields are generated metadata. Keep scanning every
 # other field and file with the unchanged detector set.
 EXCLUDE_FILES = (
     r"^(?:data[\\/]fmp_canary_manifest\.json|evals[\\/]receipts[\\/].*|docs[\\/]hardening[\\/].*"
-    r"|docs[\\/]quality[\\/](?:architecture-initial-09d35d1a|duplicates-initial-09d35d1a"
-    r"|static-baseline|compatibility-baseline)\.json"
-    r"|docs[\\/]quality[\\/]reachability-(?:dynamic-import|getattr|process)-dispositions\.json"
     r"|config[\\/]filing_xbrl_processor_(?:approval|bundle)\.json"
     r"|docs[\\/]design[\\/]deletion_catalog_2026_08\.json"
     r"|evals[\\/]golden[\\/]metric_lifecycle_triage\.json"

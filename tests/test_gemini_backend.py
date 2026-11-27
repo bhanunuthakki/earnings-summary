@@ -696,6 +696,7 @@ def test_call_gemini_missing_api_key_raises_setup_error(
     _no_budget(monkeypatch)
     monkeypatch.setattr(gemini_backend, "_gemini_setup_verified", False)
     monkeypatch.setattr(gemini_backend, "_gemini_api_key", None)
+    monkeypatch.setattr(gemini_backend, "_load_gemini_key_from_fleet_env", lambda: None)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     with pytest.raises(llm_cli.LLMSetupError, match="aistudio"):

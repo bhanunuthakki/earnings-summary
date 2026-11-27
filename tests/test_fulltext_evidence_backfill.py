@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from provenance import fulltext_backfill as fulltext_backfill_module
 from provenance.evidence_backfill import BackfillRequest, backfill_legacy_evidence
 from provenance.evidence_ledger import (
@@ -56,7 +55,13 @@ from provenance.source_inventory_seal import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-LEGACY_BASE_REVISION = "0213_decision_draft_provider_id"
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def test_pdf_table_detector_runtime_identity_is_exact_and_closed() -> None:
@@ -177,60 +182,30 @@ def _connection(
     accession_number: str | None = None,
     coverage_schema: bool = False,
 ) -> tuple[sqlite3.Connection, Path]:
+    del coverage_schema
     db_path = tmp_path / "portfolio.db"
     repo_root = tmp_path / "repo"
     artifact = repo_root / "data" / f"ACME{suffix}"
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(content)
     digest = hashlib.sha256(content).hexdigest()
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(
-            """
-            CREATE TABLE documents (
-              id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
-              doc_type TEXT NOT NULL, period_start TIMESTAMP, period_end TIMESTAMP,
-              file_path TEXT NOT NULL, sha256 TEXT NOT NULL, fetched_at TIMESTAMP NOT NULL,
-              fetch_status TEXT NOT NULL, raw_bytes_size INTEGER NOT NULL, source_url TEXT,
-              accession_number TEXT
-            );
-            """
-        )
-        conn.execute(
-            "INSERT INTO documents VALUES (1, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, ?, ?, "
-            "'2026-07-20 12:00:00', 'ok', ?, NULL, ?)",
-            (f"data/ACME{suffix}", digest, len(content), accession_number),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    config = _config(db_path)
-    command.stamp(config, LEGACY_BASE_REVISION)
-    command.upgrade(config, "0213_evidence_ledger_foundation")
-    command.stamp(config, "0217_fact_selection_ledger")
-    command.upgrade(config, "0218_evidence_replica_links")
-    if coverage_schema:
-        support = sqlite3.connect(db_path)
-        try:
-            support.executescript(
-                """
-                CREATE TABLE search_corpus_manifests (
-                  manifest_id TEXT PRIMARY KEY
-                );
-                CREATE TABLE search_index_runs (
-                  index_run_id TEXT PRIMARY KEY,
-                  manifest_id TEXT NOT NULL,
-                  outcome TEXT NOT NULL
-                );
-                """
-            )
-            support.commit()
-        finally:
-            support.close()
-        command.upgrade(config, "0220_source_inventory_seals")
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    from sqlite_runtime import register_sqlite_integrity_functions
+
+    register_sqlite_integrity_functions(conn)
+    conn.execute(
+        "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+        "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+        "accession_number) "
+        "VALUES (1, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, ?, ?, "
+        "'2026-07-20 12:00:00', 'ok', ?, NULL, ?)",
+        (f"data/ACME{suffix}", digest, len(content), accession_number),
+    )
+    conn.commit()
     backfill_legacy_evidence(conn, BackfillRequest(repo_root=repo_root, apply=True))
     return conn, repo_root
 
@@ -253,7 +228,10 @@ def _add_legacy_documents(
         artifact = repo_root / relative_path
         artifact.write_bytes(content)
         conn.execute(
-            "INSERT INTO documents VALUES (?, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, "
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+            "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+            "accession_number) "
+            "VALUES (?, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, "
             "?, ?, '2026-07-20 12:00:00', 'ok', ?, NULL, NULL)",
             (
                 document_id,
@@ -406,6 +384,38 @@ def _seed_archive_replica_lineage(
     archive_issuer_id = str(archive[1])
     archive_accession = str(archive[2])
     archive_observation_id = str(archive[3])
+
+    def _seed_issuer_obligation(target_issuer_id: str) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO issuer_entities VALUES (?,?,?,?)",
+            (target_issuer_id, target_issuer_id, "operating_company", recorded_at),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"periodic:{target_issuer_id}:v1",
+                f"periodic:{target_issuer_id}:v1",
+                f"periodic:{target_issuer_id}",
+                1,
+                target_issuer_id,
+                None,
+                "sec_edgar",
+                "operating_company_periodic",
+                "required",
+                "regulator_inventory",
+                recorded_at,
+                None,
+                "deterministic",
+                "test",
+                "{}",
+                recorded_at,
+                recorded_at,
+                recorded_at,
+                None,
+            ),
+        )
+
+    _seed_issuer_obligation(archive_issuer_id)
     _seed_sealed_inventory(
         conn,
         snapshot_id="snapshot:archive",
@@ -428,6 +438,8 @@ def _seed_archive_replica_lineage(
         return None
 
     replica_issuer = "issuer:wrong" if mismatch == "issuer" else archive_issuer_id
+    if replica_issuer != archive_issuer_id:
+        _seed_issuer_obligation(replica_issuer)
     replica_accession = "wrong-accession" if mismatch == "accession" else archive_accession
     replica_snapshot = (
         "snapshot:replica" if mismatch in {"issuer", "snapshot"} else "snapshot:archive"
@@ -728,7 +740,10 @@ def test_one_per_document_bounded_oversized_candidate_is_admitted(
 def test_office_scope_skips_other_formats_and_seals_checkpoint_scope(tmp_path: Path) -> None:
     conn, repo_root = _connection(tmp_path)
     conn.execute(
-        "INSERT INTO documents VALUES (2, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, "
+        "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+        "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+        "accession_number) "
+        "VALUES (2, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, "
         "'data/unbridged.txt', ?, '2026-07-20 12:00:00', 'ok', 1, NULL, NULL)",
         ("0" * 64,),
     )
@@ -853,16 +868,15 @@ def test_html_preserves_hierarchy_dom_paths_and_exact_source_spans(tmp_path: Pat
         conn.commit()
         result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
         assert result.documents_extracted == 1
-        assert result.substantive_nodes_created == 9
+        assert result.substantive_nodes_created == 5
         assert result.reference_nodes_created == 0
         assert result.substantive_node_kind_counts == {
             "passage": 1,
             "section": 1,
             "table": 1,
-            "table_cell": 4,
             "table_row": 2,
         }
-        assert result.largest_document_node_count == 9
+        assert result.largest_document_node_count == 5
         rows = conn.execute(
             "SELECT node_kind, text, locator_json, parent_node_id, node_id "
             "FROM evidence_nodes WHERE extraction_run_id LIKE 'fulltext-run-%' "
@@ -873,11 +887,7 @@ def test_html_preserves_hierarchy_dom_paths_and_exact_source_spans(tmp_path: Pat
             "passage",
             "table",
             "table_row",
-            "table_cell",
-            "table_cell",
             "table_row",
-            "table_cell",
-            "table_cell",
         ]
         assert [row["text"] for row in rows if row["node_kind"] in {"section", "passage"}] == [
             "Results",
@@ -886,13 +896,13 @@ def test_html_preserves_hierarchy_dom_paths_and_exact_source_spans(tmp_path: Pat
         assert all("ignore" not in str(row["text"]) for row in rows)
         assert rows[2]["text"] == ("HTML table structure; child rows carry reported content.")
         assert rows[3]["text"] == "Metric \u241f Q2"
-        assert rows[6]["text"] == "Revenue \u241f 120"
+        assert rows[4]["text"] == "Revenue \u241f 120"
         decoded = content.decode("utf-8")
         for row in rows:
             locator = json.loads(row["locator_json"])
             assert locator["filing_section_key_raw"].startswith("/")
             source_span = decoded[locator["char_start"] : locator["char_end"]]
-            if row["node_kind"] in {"section", "passage", "table_cell"}:
+            if row["node_kind"] in {"section", "passage"}:
                 assert source_span == row["text"]
             elif row["node_kind"] == "table":
                 assert source_span.startswith("<table>")
@@ -904,16 +914,15 @@ def test_html_preserves_hierarchy_dom_paths_and_exact_source_spans(tmp_path: Pat
         assert rows[1]["parent_node_id"] == section_id
         table_id = rows[2]["node_id"]
         assert rows[3]["parent_node_id"] == table_id
-        assert rows[4]["parent_node_id"] == rows[3]["node_id"]
-        first_cell_locator = json.loads(rows[4]["locator_json"])
-        assert first_cell_locator["table_row_index"] == 1
-        assert first_cell_locator["table_column_index"] == 1
+        assert rows[4]["parent_node_id"] == table_id
+        first_row_locator = json.loads(rows[3]["locator_json"])
+        assert first_row_locator["table_row_index"] == 1
         run = conn.execute(
             "SELECT extractor_code_version, idempotency_key "
             "FROM evidence_extraction_runs WHERE extraction_run_id LIKE 'fulltext-run-%'"
         ).fetchone()
-        assert run[0] == "fulltext-evidence-backfill@4-replica-aware-web-archive"
-        assert str(run[1]).startswith("fulltext-structured-web-archive-v4:")
+        assert run[0] == "fulltext-evidence-backfill@5-row-level-web-archive"
+        assert str(run[1]).startswith("fulltext-structured-web-archive-v5:")
         replacement = conn.execute(
             "SELECT text, revision, supersedes_node_id FROM v_evidence_current "
             "WHERE evidence_key = ?",
@@ -972,7 +981,27 @@ def test_html_row_aggregation_preserves_nested_cell_text_once_with_exact_row_spa
                 "AND node_kind = 'table_cell' ORDER BY rowid"
             ).fetchall()
         ]
-        assert cell_texts == ["Metric", "Value", "Revenue ", "growth", "120"]
+        assert cell_texts == []
+
+        opt_in = backfill_fulltext_evidence(
+            conn,
+            FullTextBackfillRequest(
+                repo_root=repo_root,
+                apply=True,
+                include_table_cells=True,
+                task_id="fulltext-opt-in-cells",
+            ),
+        )
+        assert opt_in.documents_extracted == 1
+        opt_in_cell_texts = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT text FROM evidence_nodes "
+                "WHERE extraction_run_id LIKE 'fulltext-run-%' "
+                "AND node_kind = 'table_cell' ORDER BY rowid"
+            ).fetchall()
+        ]
+        assert opt_in_cell_texts == ["Metric", "Value", "Revenue ", "growth", "120"]
     finally:
         conn.close()
 
@@ -1154,7 +1183,7 @@ def test_zip_rejects_binary_replica_outside_exact_sealed_package(
             conn.execute(
                 "SELECT outcome FROM evidence_extraction_runs "
                 "WHERE extractor_code_version = "
-                "'fulltext-evidence-backfill@4-replica-aware-web-archive'"
+                "'fulltext-evidence-backfill@5-row-level-web-archive'"
             ).fetchone()[0]
             == "failed"
         )
@@ -1193,7 +1222,7 @@ def test_zip_quarantines_unsafe_unsupported_or_conflicting_members(
         ).fetchone()
         assert run["outcome"] == "failed"
         assert run["extractor_code_version"] == (
-            "fulltext-evidence-backfill@4-replica-aware-web-archive"
+            "fulltext-evidence-backfill@5-row-level-web-archive"
         )
     finally:
         conn.close()
@@ -2113,3 +2142,294 @@ def test_retained_6_21_1_identity_preserves_prior_runtime_lineage() -> None:
     assert retained in readable_fulltext_extractor_identities(PDF_FULLTEXT_EXTRACTOR)
     assert retained.config_sha256 != PDF_FULLTEXT_EXTRACTOR.config_sha256
     assert retained.idempotency_namespace != PDF_FULLTEXT_EXTRACTOR.idempotency_namespace
+
+
+def test_html_v5_default_skips_table_cells_preserves_v4_coverage_and_satisfies_search_and_coverage(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from datetime import UTC
+
+    from provenance.fulltext_extractor_identity import (
+        STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
+        STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR,
+        readable_fulltext_extractor_identities,
+    )
+    from provenance.reporting_entity_registry import (
+        ReportingEntityRegistry,
+        SourceObligationRevision,
+    )
+    from provenance.source_coverage_refresh import CoverageRefreshRequest, refresh_source_coverage
+    from search.corpus_builder import (
+        CorpusBuildRequest,
+        ExpectedDocument,
+        build_grounded_search_corpus,
+    )
+    from sqlite_runtime import register_sqlite_integrity_functions
+
+    assert STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR in readable_fulltext_extractor_identities(
+        STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR
+    )
+    db_path = migrated_db(tmp_path / "fulltext-v5.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    register_sqlite_integrity_functions(conn)
+    conn.execute("PRAGMA foreign_keys = ON")
+    stamp = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+    html_v5 = (
+        b"<html><body><h1>Q2 Summary</h1><p>Operating margin improved.</p>"
+        b"<table><tr><th>Metric</th><th>Q2</th></tr>"
+        b"<tr><td>Revenue</td><td>250</td></tr></table></body></html>"
+    )
+    html_v4 = (
+        b"<html><body><h1>Retained Filing</h1>"
+        b"<table><tr><td>EPS</td><td>3.10</td></tr></table></body></html>"
+    )
+    path_v5 = tmp_path / "v5.html"
+    path_v4 = tmp_path / "v4.html"
+    path_v5.write_bytes(html_v5)
+    path_v4.write_bytes(html_v4)
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES ('issuer-acme', 'Acme Corp', 'operating_company', ?)",
+            (stamp.isoformat(),),
+        )
+        ReportingEntityRegistry(conn).persist(
+            SourceObligationRevision(
+                obligation_revision_id="v5-obligation",
+                idempotency_key="v5-obligation",
+                obligation_key="v5-periodic",
+                revision=1,
+                issuer_id="issuer-acme",
+                authority_kind="sec_edgar",
+                document_family="operating_company_periodic",
+                obligation_state="required",
+                completeness_rule="regulator_inventory",
+                active_from=datetime(2026, 1, 1, tzinfo=UTC),
+                active_to=None,
+                decision_kind="deterministic",
+                reason_code="fixture_periodic",
+                reason_details=(("fixture", "local"),),
+                effective_at=stamp,
+                knowledge_at=stamp,
+                recorded_at=stamp,
+            )
+        )
+        ledger = EvidenceLedger(conn)
+        for doc_id, body, path, url in (
+            ("doc-v5", html_v5, path_v5, "https://sec.test/v5.html"),
+            ("doc-v4", html_v4, path_v4, "https://sec.test/v4.html"),
+        ):
+            digest = hashlib.sha256(body).hexdigest()
+            ledger.persist(
+                ContentBlob(
+                    sha256=digest,
+                    byte_size=len(body),
+                    media_type="text/html",
+                    storage_uri=path.as_uri(),
+                    recorded_at=stamp,
+                )
+            )
+            ledger.persist(
+                SourceObservation(
+                    observation_id=f"obs-{doc_id}",
+                    idempotency_key=f"obs-{doc_id}",
+                    source_kind="sec_filing_document",
+                    source_url=url,
+                    blob_sha256=digest,
+                    source_published_at=stamp,
+                    filing_at=stamp,
+                    accepted_at=stamp,
+                    observed_at=stamp,
+                    retrieved_at=stamp,
+                    retrieval_config_sha256="a" * 64,
+                    collector_code_version="test@1",
+                )
+            )
+            ledger.persist(
+                DocumentVersion(
+                    document_version_id=doc_id,
+                    document_key=f"key-{doc_id}",
+                    version_sequence=1,
+                    observation_id=f"obs-{doc_id}",
+                    blob_sha256=digest,
+                    issuer_id="issuer-acme",
+                    ticker="ACME",
+                    document_type="10-Q",
+                    form_type="10-Q",
+                    accession_number="0000000001-26-000001",
+                    language="en",
+                    legacy_document_id=None,
+                    recorded_at=stamp,
+                )
+            )
+        _seed_sealed_inventory(
+            conn,
+            snapshot_id="snap-v5",
+            inventory_key="inv-v5",
+            issuer_id="issuer-acme",
+            observation_id="obs-doc-v5",
+            recorded_at=stamp,
+        )
+        _seed_covered_document(
+            conn,
+            expected_document_id="exp-v5",
+            snapshot_id="snap-v5",
+            issuer_id="issuer-acme",
+            accession_number="0000000001-26-000001",
+            document_version_id="doc-v5",
+            recorded_at=stamp,
+        )
+        conn.commit()
+
+        # 1. Default v5 extraction emits zero table_cell nodes while keeping table_row.
+        v5_result = backfill_fulltext_evidence(
+            conn,
+            FullTextBackfillRequest(
+                repo_root=tmp_path,
+                source_lane="evidence_native",
+                document_version_id="doc-v5",
+                apply=True,
+            ),
+        )
+        assert v5_result.documents_extracted == 1
+        assert "table_cell" not in v5_result.substantive_node_kind_counts
+        assert v5_result.substantive_node_kind_counts["table_row"] == 2
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_nodes node "
+                "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
+                "WHERE run.document_version_id='doc-v5' AND node.node_kind='table_cell'"
+            ).fetchone()[0]
+            == 0
+        )
+
+        # 2. v5 satisfies source_coverage_refresh and corpus_builder (search_chunks).
+        coverage = refresh_source_coverage(
+            conn,
+            CoverageRefreshRequest(
+                inventory_keys=("inv-v5",),
+                recorded_at=datetime(2026, 7, 21, 12, 0, tzinfo=UTC),
+                apply=True,
+            ),
+        )
+        assert coverage.assessments_created == 1
+        assert coverage.target_status_counts == {"extracted": 1}
+
+        corpus = build_grounded_search_corpus(
+            conn,
+            CorpusBuildRequest(
+                corpus_key="corpus-v5",
+                revision=1,
+                selector_code_version="test-selector@1",
+                expected_documents=(
+                    ExpectedDocument(
+                        expected_document_key="expected-key:exp-v5",
+                        document_version_id="doc-v5",
+                        membership_status="included",
+                        reason="v5 html test",
+                    ),
+                ),
+                knowledge_cutoff=datetime(2026, 7, 21, 12, 0, tzinfo=UTC),
+                recorded_at=datetime(2026, 7, 21, 12, 0, tzinfo=UTC),
+                apply=True,
+            ),
+        )
+        assert corpus.completion_status == "complete"
+        chunk_texts = [
+            str(row[0]) for row in conn.execute("SELECT text FROM search_chunks ORDER BY chunk_id")
+        ]
+        assert any("Revenue \u241f 250" in text for text in chunk_texts)
+        assert any("Operating margin improved." in text for text in chunk_texts)
+
+        # 3. Existing v4 opt-in run stays valid and is NOT re-extracted by default v5 backfill.
+        v4_opt_in = backfill_fulltext_evidence(
+            conn,
+            FullTextBackfillRequest(
+                repo_root=tmp_path,
+                source_lane="evidence_native",
+                document_version_id="doc-v4",
+                include_table_cells=True,
+                apply=True,
+            ),
+        )
+        assert v4_opt_in.documents_extracted == 1
+        assert v4_opt_in.substantive_node_kind_counts["table_cell"] == 2
+        v4_runs_before = conn.execute(
+            "SELECT COUNT(*) FROM evidence_extraction_runs WHERE document_version_id='doc-v4'"
+        ).fetchone()[0]
+        default_replay = backfill_fulltext_evidence(
+            conn,
+            FullTextBackfillRequest(
+                repo_root=tmp_path,
+                source_lane="evidence_native",
+                document_version_id="doc-v4",
+                apply=True,
+            ),
+        )
+        assert default_replay.documents_skipped_covered == 1
+        assert default_replay.documents_extracted == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs WHERE document_version_id='doc-v4'"
+            ).fetchone()[0]
+            == v4_runs_before
+        )
+    finally:
+        conn.close()
+
+
+def test_fulltext_backfill_skips_index_member_tickers_by_default(tmp_path: Path) -> None:
+    conn, repo_root = _connection(tmp_path)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO tenants (id, created_at) VALUES ('bhanu', '2026-07-20 00:00:00')"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker, name, list_type, archived_at) "
+            "VALUES (?, ?, ?, NULL)",
+            (("ACME", "Acme", "portfolio"), ("IDX", "Index Member", "index_member")),
+        )
+        idx_body = b"Index member text that must be skipped by batch backfill."
+        idx_path = repo_root / "data" / "IDX.txt"
+        idx_path.write_bytes(idx_body)
+        conn.execute(
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_start, period_end, "
+            "file_path, sha256, fetched_at, fetch_status, raw_bytes_size, source_url, "
+            "accession_number) VALUES (2, 'IDX', 'sec_edgar', '10-Q', NULL, NULL, "
+            "'data/IDX.txt', ?, '2026-07-20 12:00:00', 'ok', ?, NULL, NULL)",
+            (hashlib.sha256(idx_body).hexdigest(), len(idx_body)),
+        )
+        conn.commit()
+        backfill_legacy_evidence(
+            conn,
+            BackfillRequest(repo_root=repo_root, document_id=2, apply=True),
+        )
+
+        batch = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+        assert batch.documents_considered == 1
+        assert batch.documents_extracted == 1
+        assert batch.last_document_id_after == 1
+        assert batch.has_more is False
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs "
+                "WHERE document_version_id='legacy-doc-2' "
+                "AND extractor_name='fulltext-evidence-backfill'"
+            ).fetchone()[0]
+            == 0
+        )
+
+        # Explicit --document-id targeting still extracts when intentionally requested.
+        targeted = backfill_fulltext_evidence(
+            conn,
+            FullTextBackfillRequest(
+                repo_root=repo_root,
+                document_id=2,
+                apply=True,
+                task_id="targeted-index-member",
+            ),
+        )
+        assert targeted.documents_extracted == 1
+    finally:
+        conn.close()

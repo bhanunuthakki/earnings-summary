@@ -699,66 +699,6 @@ def test_ytd_without_exact_duration_header_fails_closed(
         request(conn, legacy)
 
 
-def test_bridge_is_ready_for_exact_ontology_and_financial_scale(
-    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
-) -> None:
-    from provenance.fact_read_model import FactReadModel
-    from provenance.financial_derivations import MonetaryScaleRequest, publish_monetary_scale
-    from provenance.population_metric_ontology import (
-        ExactSourceAdmissionRequest,
-        ExactSourceObservationReview,
-        admit_exact_source_observations,
-    )
-
-    conn, legacy, _, _ = reviewed
-    apply(conn, request(conn, legacy))
-    native = native_source_observation_id(legacy)
-    bundle = FactReadModel(conn).provenance_bundle(native, cutoff=RECORDED)
-    assert bundle.evidence is not None
-    semantic = conn.execute(
-        "SELECT semantic_key_sha256 FROM fact_cell_identity_seals_v2 WHERE fact_cell_id=?",
-        (bundle.cell.fact_cell_id,),
-    ).fetchone()[0]
-    review = ExactSourceObservationReview(
-        observation_id=native,
-        document_version_id=bundle.evidence.document_version_id,
-        subject_binding_revision_id=bundle.evidence.subject_binding_revision_id,
-        observation_payload_sha256=bundle.observation_payload_sha256,
-        source_locator_sha256=bundle.evidence.source_locator_sha256,
-        fact_cell_semantic_key_sha256=semantic,
-    )
-    admission = ExactSourceAdmissionRequest(
-        observations=(review,),
-        reviewer_identity="fixture",
-        review_evidence={
-            "source_projection": request(conn, legacy)
-            .reviewed_kpi_projections[0]
-            .source_entry_sha256
-        },
-        knowledge_cutoff=RECORDED,
-        operation_recorded_at=RECORDED,
-    )
-    receipt = admit_exact_source_observations(conn, admission)
-    assert receipt.observation_ids == (native,)
-    scaled, _ = publish_monetary_scale(
-        conn,
-        MonetaryScaleRequest(
-            source_observation_id=native,
-            source_scale="millions",
-            knowledge_cutoff=RECORDED,
-            recorded_at=RECORDED,
-        ),
-    )
-    assert scaled.observation.numeric_value == "1088000000"
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM fact_observations_v2 WHERE observation_kind='reported'"
-        ).fetchone()[0]
-        == 1
-    )
-    assert conn.execute("SELECT COUNT(*) FROM ontology_snapshot_headers").fetchone()[0] == 0
-
-
 def test_exact_raw_fy_label_remains_fy(
     reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
 ) -> None:

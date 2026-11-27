@@ -31,8 +31,11 @@ checkout does not make that database isolated.
    existing authority; never publish them as release content.
 2. Build and validate one reviewed release commit through the normal repository path.
    The clean source checkout and installed runtime must have that same actual commit,
-   matching migration graphs, and clean relevant source status. The current readiness
-   guard also requires the source checkout at freshly fetched `origin/main`. Verify all
+   matching migration graphs, and clean relevant source status. For `operational`
+   readiness, the guard requires the source checkout to match freshly fetched
+   `origin/main` exactly; for `migration` readiness, an ancestor checkout is also
+   permitted when `git diff` against freshly fetched `origin/main` touches no
+   migration-critical paths (failing closed if the diff is unavailable). Verify all
    installed source bytes against the prepared release manifest, including removals and
    unexpected source files; changing HEAD/index metadata or copying a partial patch is
    not deployment proof.

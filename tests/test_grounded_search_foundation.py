@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -28,6 +26,15 @@ from provenance.integrity_audit import (
     audit_connection,
 )
 from search.corpus_builder import lexical_index_config_sha256
+from search.embedding_runtime_artifact import (
+    EmbeddingRuntimeArtifact,
+    RuntimeArtifactFile,
+    RuntimeComponentVersion,
+)
+from search.embedding_runtime_registration import (
+    persist_runtime_registration,
+    registration_from_artifact,
+)
 from search.grounded import (
     CorpusDocumentMembership,
     CorpusManifest,
@@ -43,6 +50,7 @@ from search.grounded import (
     VectorCandidate,
     membership_digest,
 )
+from sqlite_runtime import register_sqlite_integrity_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_HEAD = "0213_evidence_ledger_foundation"
@@ -50,24 +58,32 @@ PRIOR = "0215_observation_resolution_ledger"
 HEAD = "0216_search_corpus_foundation"
 STAMP = datetime(2026, 7, 26, 20, 0, 0)
 A, B, C = "a" * 64, "b" * 64, "c" * 64
+_RUNTIME_ARTIFACT = EmbeddingRuntimeArtifact(
+    provider="future-provider",
+    model="future-model",
+    dimensions=3,
+    execution_provider="CPUExecutionProvider",
+    execution_settings=(),
+    component_versions=(RuntimeComponentVersion(component="fastembed", version="1.2.3"),),
+    files=(RuntimeArtifactFile(logical_name="model.onnx", role="model", size_bytes=3, sha256=C),),
+)
+_RUNTIME_SHA = _RUNTIME_ARTIFACT.sha256()
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def _conn(tmp_path: Path) -> sqlite3.Connection:
     path = tmp_path / "search.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, EVIDENCE_HEAD)
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
+    register_sqlite_integrity_functions(conn)
     return conn
 
 
@@ -138,6 +154,14 @@ def _seed_evidence(conn: sqlite3.Connection) -> None:
             text="Revenue grew strongly.",
             recorded_at=STAMP,
         )
+    )
+    persist_runtime_registration(
+        conn,
+        registration_from_artifact(
+            _RUNTIME_ARTIFACT,
+            registered_at=STAMP,
+            purpose="evidence_vector_retrieval",
+        ),
     )
 
 
@@ -252,6 +276,44 @@ def _seal(
     )
 
 
+def _seal_projection(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    manifest_id: str,
+    kind: Literal["lexical", "vector"],
+    chunk_count: int = 1,
+) -> None:
+    config_sha = (
+        lexical_index_config_sha256(conn, manifest_id=manifest_id) if kind == "lexical" else A
+    )
+    conn.execute(
+        "INSERT INTO search_projection_seals "
+        "(projection_seal_id, idempotency_key, index_run_id, manifest_id, index_kind, "
+        "chunk_count, chunk_set_sha256, projection_records_sha256, artifact_set_sha256, "
+        "provider, model, dimensions, config_sha256, storage_uri, sealed_at, "
+        "runtime_artifact_sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            f"seal:{run_id}",
+            f"seal:{run_id}",
+            run_id,
+            manifest_id,
+            kind,
+            chunk_count,
+            A,
+            B,
+            C if kind == "vector" else None,
+            "future-provider" if kind == "vector" else None,
+            "future-model" if kind == "vector" else None,
+            3 if kind == "vector" else None,
+            config_sha,
+            f"sqlite://{kind}/{run_id}",
+            STAMP,
+            _RUNTIME_SHA if kind == "vector" else None,
+        ),
+    )
+
+
 def _index(
     conn: sqlite3.Connection,
     store: GroundedSearchStore,
@@ -262,6 +324,8 @@ def _index(
     index_key: str | None = None,
     revision: int = 1,
     outcome: Literal["succeeded", "failed"] = "succeeded",
+    *,
+    seal: bool = True,
 ) -> str:
     run_id = run_id or f"{manifest_id}:{kind}:{revision}"
     store.persist(
@@ -293,6 +357,34 @@ def _index(
                 recorded_at=STAMP,
             )
         )
+        if kind == "vector":
+            chunk_row = conn.execute(
+                "SELECT content_sha256 FROM search_chunks WHERE chunk_id = ?",
+                (chunk_id,),
+            ).fetchone()
+            chunk_input_sha = str(chunk_row[0]) if chunk_row is not None else A
+            store.persist(
+                EmbeddingArtifact(
+                    embedding_artifact_id=f"{run_id}:seed:{chunk_id}",
+                    idempotency_key=f"{run_id}:seed:{chunk_id}",
+                    index_run_id=run_id,
+                    chunk_id=chunk_id,
+                    purpose="grounded_search",
+                    provider="future-provider",
+                    model="future-model",
+                    dimensions=3,
+                    vector_sha256=C,
+                    storage_uri=f"vector://index/{run_id}/{chunk_id}",
+                    input_sha256=chunk_input_sha,
+                    request_config_sha256=A,
+                    runtime_artifact_sha256=_RUNTIME_SHA,
+                    outcome="succeeded",
+                    started_at=STAMP,
+                    completed_at=STAMP,
+                )
+            )
+        if seal:
+            _seal_projection(conn, run_id=run_id, manifest_id=manifest_id, kind=kind)
     return run_id
 
 
@@ -303,10 +395,10 @@ def _ready_store(conn: sqlite3.Connection, vector: bool = True) -> GroundedSearc
     store.persist(_manifest())
     store.persist(member)
     store.persist(_chunk())
+    _seal(store, [member])
     _index(conn, store)
     if vector:
         _index(conn, store, kind="vector")
-    _seal(store, [member])
     return store
 
 
@@ -331,14 +423,9 @@ def test_retrieval_stack_inventory_has_one_grounded_and_fact_projection_path() -
 def test_hybrid_retrieval_preserves_candidate_identity_and_evidence_metadata(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    path = tmp_path / "retrieval-parity.db"
-    migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        archived=True,
-        target="0221_ask_retrieval_traces",
-    )
+    path = migrated_db(tmp_path / "retrieval-parity.db")
     conn = sqlite3.connect(path)
+    register_sqlite_integrity_functions(conn)
     try:
         _ready_store(conn)
         bundles = HybridRetriever(conn).search(
@@ -391,14 +478,9 @@ def test_hybrid_retrieval_preserves_candidate_identity_and_evidence_metadata(
 def test_ask_trace_audit_recomputes_legacy_bundle_digest(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    path = tmp_path / "ask-trace-audit.db"
-    migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        archived=True,
-        target="0221_ask_retrieval_traces",
-    )
+    path = migrated_db(tmp_path / "ask-trace-audit.db")
     conn = sqlite3.connect(path)
+    register_sqlite_integrity_functions(conn)
     try:
         _ready_store(conn)
         bundle = HybridRetriever(conn).search(
@@ -578,7 +660,7 @@ def test_chunk_fts_is_transactional_and_embedding_contract_is_explicit(tmp_path:
             "SELECT COUNT(*) FROM search_lexical_chunks WHERE search_lexical_chunks MATCH 'Revenue'"
         ).fetchone() == (2,)
         assert store.persist(chunk).created is False
-        vector_run_id = _index(conn, store, kind="vector")
+        vector_run_id = _index(conn, store, kind="vector", seal=False)
         store.persist(
             EmbeddingArtifact(
                 embedding_artifact_id="embed",
@@ -593,6 +675,7 @@ def test_chunk_fts_is_transactional_and_embedding_contract_is_explicit(tmp_path:
                 storage_uri="vector://index/embed",
                 input_sha256=chunk.content_sha256 or "",
                 request_config_sha256=A,
+                runtime_artifact_sha256=_RUNTIME_SHA,
                 outcome="succeeded",
                 started_at=STAMP,
                 completed_at=STAMP,
@@ -715,7 +798,7 @@ def test_vector_candidates_are_db_filtered_before_rrf(tmp_path: Path) -> None:
                 recorded_at=STAMP,
             )
         )
-        _index(conn, store, chunk_id="chunk")
+        _index(conn, store, chunk_id="chunk", seal=False)
         store.persist(
             IndexMembership(
                 index_run_id="manifest:lexical:1",
@@ -724,7 +807,7 @@ def test_vector_candidates_are_db_filtered_before_rrf(tmp_path: Path) -> None:
                 recorded_at=STAMP,
             )
         )
-        _index(conn, store, chunk_id="chunk", kind="vector")
+        _index(conn, store, chunk_id="chunk", kind="vector", seal=False)
         store.persist(
             IndexMembership(
                 index_run_id="manifest:vector:1",
@@ -733,7 +816,41 @@ def test_vector_candidates_are_db_filtered_before_rrf(tmp_path: Path) -> None:
                 recorded_at=STAMP,
             )
         )
+        store.persist(
+            EmbeddingArtifact(
+                embedding_artifact_id="manifest:vector:1:seed:aaa-other",
+                idempotency_key="manifest:vector:1:seed:aaa-other",
+                index_run_id="manifest:vector:1",
+                chunk_id="aaa-other",
+                purpose="grounded_search",
+                provider="future-provider",
+                model="future-model",
+                dimensions=3,
+                vector_sha256=C,
+                storage_uri="vector://index/manifest:vector:1/aaa-other",
+                input_sha256=sha256(other_text.encode("utf-8")).hexdigest(),
+                request_config_sha256=A,
+                runtime_artifact_sha256=_RUNTIME_SHA,
+                outcome="succeeded",
+                started_at=STAMP,
+                completed_at=STAMP,
+            )
+        )
         _seal(store, [acme, other])
+        _seal_projection(
+            conn,
+            run_id="manifest:lexical:1",
+            manifest_id="manifest",
+            kind="lexical",
+            chunk_count=2,
+        )
+        _seal_projection(
+            conn,
+            run_id="manifest:vector:1",
+            manifest_id="manifest",
+            kind="vector",
+            chunk_count=2,
+        )
 
         class Vectors:
             def search(
@@ -761,9 +878,9 @@ def test_retrieval_cannot_mix_manifests_or_unindexed_vectors(tmp_path: Path) -> 
         store.persist(_manifest("other", "other-company-reporting"))
         store.persist(member)
         store.persist(_chunk("other", "other-chunk"))
+        _seal(store, [member], manifest_id="other")
         _index(conn, store, "other", "other-chunk")
         _index(conn, store, "other", "other-chunk", "vector")
-        _seal(store, [member], manifest_id="other")
 
         class Vectors:
             def search(
@@ -789,8 +906,5 @@ def test_fts_capability_and_migration(tmp_path: Path) -> None:
     finally:
         conn.close()
     path = tmp_path / "roundtrip.db"
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, EVIDENCE_HEAD)
-    command.stamp(config, PRIOR)
-    command.upgrade(config, HEAD)
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(path)

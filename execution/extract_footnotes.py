@@ -1,30 +1,12 @@
 """Extract structured footnote_facts from 10-K Item 8.
 
-Item 8 is the long, dense "Financial Statements and Supplementary Data"
-section. Buried in its 50-150 pages are the high-signal disclosures
-analysts mostly skip:
-
-  - Related-party transactions
-  - Contingent liabilities (litigation reserves, indemnifications)
-  - Lease commitments (operating + finance leases)
-  - Stock-based compensation footnote (grant value vs P&L expense)
-  - Off-balance-sheet items
-  - Goodwill / impairment events
-  - Segment realignment disclosures
-  - Critical accounting estimate references
-
-Pipeline:
-  1. Fetch Item 8 text via filing_text_fetcher.
-  2. Single Sonnet call with the Item 8 text + a structured-extraction
-     prompt → JSON list of footnote_facts rows.
-  3. Persist via INSERT (idempotent on a composite natural key).
-
-Cost: Item 8 is large (~80-200KB of text); one Sonnet call per ticker per
-year. Cached after first run.
+Thin CLI adapter over ``src/filings/footnote_drivers.py``. Reads retained SEC
+10-K text in ``data/sec_text/<TICKER>_10k_<FY>.txt`` by default; pass
+``--fetch`` to permit network retrieval via ``filing_text_fetcher``.
 
 Usage:
-    python execution/extract_footnotes.py --ticker GOOG
-    python execution/extract_footnotes.py --all-portfolio
+    python execution/extract_footnotes.py --ticker GOOG --db /path/to/db
+    python execution/extract_footnotes.py --ticker GOOG --db /path/to/db --fetch
 """
 
 from __future__ import annotations
@@ -32,80 +14,23 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import sqlite3
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
-
-from pydantic import BaseModel, TypeAdapter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-import db  # noqa: E402
+from db_paths import db_path_context, require_product_db_path  # noqa: E402
 from filing_text_fetcher import fetch_latest_10k_text  # noqa: E402
-from llm.structured import StructuredParseError, call_llm_structured  # noqa: E402
-from llm.untrusted import spotlight  # noqa: E402
+from filings.footnote_drivers import (  # noqa: E402
+    extract_footnote_drivers_from_text,
+    load_cached_item_8_text,
+    persist_footnote_drivers,
+)
+from llm.structured import call_llm_structured  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_footnotes")
-
-# Cap Item 8 input to keep prompts bounded. 120KB ~= 30K tokens; well under
-# Sonnet's 200K context but big enough to capture every footnote.
-_MAX_ITEM_8_CHARS = 120_000
-
-
-class FootnoteExtraction(BaseModel):
-    fact_type: str
-    footnote_number: str | None = None
-    description_md: str
-    amount: float | None = None
-    currency: str | None = None
-    unit: str | None = None
-    due_period: str | None = None
-    counterparty: str | None = None
-    status: str | None = None
-    source_excerpt: str
-
-
-_PROMPT = """You are extracting structured footnote disclosures from {ticker}'s
-fiscal year {fiscal_year} 10-K Item 8 (Financial Statements + Supplementary Data).
-
-Your job: surface ONLY the high-signal disclosures — the ones that 99% of
-analysts skip but that matter for the investment thesis. SKIP routine
-revenue-recognition policy boilerplate, generic depreciation schedules,
-standard income tax descriptions.
-
-For each disclosure you decide is high-signal, emit a JSON row with:
-
-{{
-  "fact_type": "lease_commitment" | "contingent_liability" | "related_party_tx" |
-               "stock_based_comp" | "off_balance_sheet" | "goodwill_change" |
-               "segment_realignment" | "restructuring_charge" | "litigation_reserve",
-  "footnote_number": "Note 7" | "Note 12" | ... (when stated),
-  "description_md": "<2-4 sentences with the SPECIFIC disclosure>",
-  "amount": <number, the dollar amount when given>,
-  "currency": "USD" | "EUR" | ... ,
-  "unit": "thousands" | "millions" | "billions" | ... ,
-  "due_period": "YYYY-MM-DD" (when a payment/maturity date is named, else null),
-  "counterparty": "<named counterparty, when applicable>",
-  "status": "active" | "resolved" | "reclassified",
-  "source_excerpt": "<short verbatim quote, 50-200 chars max>"
-}}
-
-Rules:
-  - Return ONLY a JSON array of rows. No commentary. No markdown fence.
-  - 5-15 rows for most large 10-Ks; SKIP if no high-signal disclosures (return []).
-  - The source_excerpt must be a real verbatim phrase from the input.
-  - Amounts: if the text says "$2.4 billion", emit amount=2400, unit=millions.
-  - PRIORITIZE: items that (a) name a specific dollar amount, (b) name a
-    counterparty, (c) flag a change from prior year, or (d) have legal /
-    regulatory implications.
-
-INPUT TEXT (Item 8, may be truncated):
-{item_8_text}
-"""
 
 
 def extract_for_ticker(
@@ -113,118 +38,86 @@ def extract_for_ticker(
     ticker: str,
     repo_root: Path,
     user_agent: str,
+    db_path: Path | None = None,
     fiscal_year: int | None = None,
+    allow_fetch: bool = True,
 ) -> dict[str, object]:
-    cache_dir = repo_root / "data" / "sec_text"
-    result = fetch_latest_10k_text(
-        ticker=ticker, user_agent=user_agent, cache_dir=cache_dir, fiscal_year=fiscal_year
+    """Extract and persist footnote drivers for one ticker."""
+    upper = ticker.upper()
+    cached = load_cached_item_8_text(
+        repo_root=repo_root,
+        ticker=upper,
+        fiscal_year=fiscal_year,
     )
-    if result is None or not result.item_8_text:
-        return {"ticker": ticker, "status": "no_item_8", "n": 0}
-
-    item_8 = result.item_8_text[:_MAX_ITEM_8_CHARS]
-    prompt = _PROMPT.format(
-        ticker=ticker,
-        fiscal_year=result.fiscal_year,
-        item_8_text=spotlight(item_8, source="SEC 10-K Item 8 filing text"),
-    )
-
-    try:
-        validated = cast(
-            "list[FootnoteExtraction]",
-            call_llm_structured(
-                prompt,
-                purpose="footnote_extraction",
-                ticker=ticker,
-                scope="filing_footnotes",
-                expect="array",
-                schema=TypeAdapter(list[FootnoteExtraction]),
-            ),
+    resolved_fy: int
+    item_8_text: str | None = None
+    if cached is not None:
+        resolved_fy, item_8_text = cached
+    elif allow_fetch:
+        fetched = fetch_latest_10k_text(
+            ticker=upper,
+            user_agent=user_agent,
+            cache_dir=repo_root / "data" / "sec_text",
+            fiscal_year=fiscal_year,
         )
-    except StructuredParseError as exc:
-        log.warning({"event": "footnote_structured_failed", "ticker": ticker, "error": str(exc)})
-        return {"ticker": ticker, "status": "structured_failed", "n": 0}
-    except Exception as exc:
-        log.warning({"event": "footnote_llm_failed", "ticker": ticker, "error": str(exc)})
-        return {"ticker": ticker, "status": "llm_failed", "n": 0}
-    rows: list[object] = [row.model_dump() for row in validated]
+        if fetched is None or not fetched.item_8_text:
+            return {"ticker": upper, "status": "no_item_8", "n": 0}
+        resolved_fy = fetched.fiscal_year
+        item_8_text = fetched.item_8_text
+    else:
+        return {"ticker": upper, "status": "missing_retained_text", "n": 0}
 
-    # Persist
-    db_path = repo_root / "data" / "portfolio.db"
-    inserted = _persist_rows(
-        ticker=ticker, fiscal_year=result.fiscal_year, rows=rows, db_path=db_path
+    with db_path_context(db_path):
+        outcome = extract_footnote_drivers_from_text(
+            ticker=upper,
+            fiscal_year=resolved_fy,
+            item_8_text=item_8_text,
+            llm_caller=call_llm_structured,
+        )
+    if outcome.status != "ok":
+        return {"ticker": upper, "fiscal_year": resolved_fy, "status": outcome.status, "n": 0}
+
+    target_db = (
+        db_path
+        if db_path is not None
+        else (fallback if (fallback := repo_root / "data" / "portfolio.db").exists() else None)
     )
+    inserted = 0
+    if target_db is not None:
+        conn = connect_sqlite(target_db, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        try:
+            inserted = persist_footnote_drivers(
+                conn,
+                ticker=upper,
+                fiscal_year=resolved_fy,
+                rows=outcome.accepted_rows,
+            )
+        finally:
+            conn.close()
+
     return {
-        "ticker": ticker,
-        "fiscal_year": result.fiscal_year,
-        "n_proposed": len(rows),
+        "ticker": upper,
+        "fiscal_year": resolved_fy,
+        "n_proposed": len(outcome.accepted_rows) + outcome.rejected_count,
+        "n_rejected": outcome.rejected_count,
         "n_inserted": inserted,
         "status": "ok",
     }
 
 
-def _persist_rows(*, ticker: str, fiscal_year: int, rows: list[object], db_path: Path) -> int:
-    if not db_path.exists():
-        return 0
-    period_end = datetime(fiscal_year, 12, 31).isoformat()  # rough; FMP gives precise dates
-    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-    inserted = 0
-    try:
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            r = cast("dict[str, object]", row)
-            fact_type = str(r.get("fact_type") or "").strip()
-            if not fact_type:
-                continue
-            description = str(r.get("description_md") or "")
-            amount_raw = r.get("amount")
-            amount: float | None = None
-            if isinstance(amount_raw, (int, float)):
-                amount = float(amount_raw)
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO footnote_facts(
-                        ticker, period_end, fiscal_period_type,
-                        footnote_number, fact_type, description_md,
-                        amount, currency, unit, due_period, counterparty,
-                        status, source_excerpt, extracted_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        ticker,
-                        period_end,
-                        "FY",
-                        str(r.get("footnote_number") or ""),
-                        fact_type,
-                        description,
-                        amount,
-                        str(r.get("currency") or "USD"),
-                        str(r.get("unit") or ""),
-                        str(r.get("due_period") or "") or None,
-                        str(r.get("counterparty") or "") or None,
-                        str(r.get("status") or "active"),
-                        str(r.get("source_excerpt") or "")[:1024],
-                        datetime.now(UTC).isoformat(),
-                    ),
-                )
-                inserted += 1
-            except sqlite3.IntegrityError:
-                continue
-        conn.commit()
-    finally:
-        conn.close()
-    return inserted
-
-
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker.")
     g.add_argument("--all-portfolio", action="store_true", help="Run for all portfolio holdings.")
+    parser.add_argument("--db", type=Path, default=None, help="Explicit database path.")
     parser.add_argument("--fiscal-year", type=int, default=None)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="Allow network retrieval from SEC EDGAR when retained text is missing.",
+    )
     parser.add_argument(
         "--user-agent",
         default=os.environ.get(
@@ -233,38 +126,39 @@ def main() -> int:
         help="SEC EDGAR User-Agent. Set EDGAR_USER_AGENT in env (recommended).",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    db.PROJECT_ROOT = str(args.repo_root)
-    db.DATA_DIR = str(args.repo_root / "data")
-    db.DB_PATH = str(args.repo_root / "data" / "portfolio.db")
-    db.FMP_DIR = str(args.repo_root / "data" / "historical" / "fmp")
+    repo_root = args.repo_root.resolve()
+    db_path = require_product_db_path(repo_root, explicit=args.db)
 
     if args.ticker:
         tickers = [args.ticker.upper()]
     else:
-        conn = connect_sqlite(
-            str(args.repo_root / "data" / "portfolio.db"), role=SQLiteConnectionRole.READ_ONLY
-        )
-        tickers = [
-            r[0]
-            for r in conn.execute(
-                "SELECT ticker FROM tracked_companies WHERE archived_at IS NULL AND list_type = 'portfolio' ORDER BY ticker"
-            )
-        ]
-        conn.close()
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            tickers = [
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT ticker FROM tracked_companies "
+                    "WHERE archived_at IS NULL AND list_type = 'portfolio' ORDER BY ticker"
+                )
+            ]
+        finally:
+            conn.close()
 
     total = 0
     for t in tickers:
         outcome = extract_for_ticker(
             ticker=t,
-            repo_root=args.repo_root,
+            repo_root=repo_root,
+            db_path=db_path,
             user_agent=args.user_agent,
             fiscal_year=args.fiscal_year,
+            allow_fetch=args.fetch,
         )
         log.info(outcome)
         n_inserted = outcome.get("n_inserted", 0)

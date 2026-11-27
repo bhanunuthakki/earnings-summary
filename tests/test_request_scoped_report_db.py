@@ -110,7 +110,11 @@ def test_overview_composition_uses_one_request_reader(
 
 
 def test_panel_activation_metrics_never_create_schema_from_request_path() -> None:
-    for path in sorted((PROJECT_ROOT / "execution").glob("comments_server*.py")):
+    paths = [
+        PROJECT_ROOT / "execution" / "comments_server.py",
+        *sorted((PROJECT_ROOT / "src" / "cockpit").glob("*.py")),
+    ]
+    for path in paths:
         source = path.read_text(encoding="utf-8")
         assert "CREATE TABLE IF NOT EXISTS panel_activation_counts" not in source, path
 

@@ -16,11 +16,9 @@ from pathlib import Path
 
 import comments_server
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
 
 import viewspec.nl_compile as nlc
-from alembic import command
 from pipeline.explore_panel import render_explore_panel
 from provenance.evidence_backfill import BackfillRequest, backfill_legacy_evidence
 from sqlite_runtime import register_sqlite_integrity_functions
@@ -279,39 +277,10 @@ def test_query_ticker_resolution(db: Path) -> None:
 # ----------------------------------------------------------------------------
 
 
-def _alembic_cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
-def test_migration_seeds_budget_row(tmp_path: Path) -> None:
-    db = tmp_path / "mig.db"
-    cfg = _alembic_cfg(db)
-    command.stamp(cfg, "0079_saved_views")
-    conn = sqlite3.connect(db)
-    # llm_budgets as 0052+0066 shape it (the stamp skipped those migrations).
-    conn.executescript(
-        """
-        CREATE TABLE llm_budgets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            purpose VARCHAR(64) NOT NULL UNIQUE,
-            monthly_cap_usd NUMERIC(10, 2) NOT NULL,
-            warn_threshold_pct FLOAT NOT NULL DEFAULT 0.80,
-            hard_block BOOLEAN NOT NULL DEFAULT 0,
-            created_at DATETIME NOT NULL,
-            updated_at DATETIME NOT NULL,
-            notes TEXT,
-            on_exceed TEXT NOT NULL DEFAULT 'warn'
-                CHECK (on_exceed IN ('skip', 'block', 'warn'))
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    # Pin to the revision under test — later migrations are someone else's.
-    command.upgrade(cfg, "0080_viewspec_compile_budget")
+def test_viewspec_compile_budget_is_seeded(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "mig.db")
     conn = sqlite3.connect(db)
     row = conn.execute(
         "SELECT monthly_cap_usd, on_exceed FROM llm_budgets WHERE purpose = 'viewspec_compile'"
@@ -320,19 +289,6 @@ def test_migration_seeds_budget_row(tmp_path: Path) -> None:
     assert row is not None
     assert float(row[0]) == 5.00
     assert row[1] == "skip"
-
-
-def test_migration_tolerates_missing_llm_budgets(tmp_path: Path) -> None:
-    db = tmp_path / "bare.db"
-    cfg = _alembic_cfg(db)
-    command.stamp(cfg, "0079_saved_views")
-    # Pinned (not "head") so later migrations don't fail this assertion;
-    # the point is only that 0080 tolerates an absent llm_budgets table.
-    command.upgrade(cfg, "0080_viewspec_compile_budget")
-    conn = sqlite3.connect(db)
-    rev = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-    conn.close()
-    assert rev == "0080_viewspec_compile_budget"
 
 
 # ----------------------------------------------------------------------------

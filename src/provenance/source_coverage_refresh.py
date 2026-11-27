@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from filings.inline_xbrl_processor import FILING_XBRL_PROTOCOL_SQL
+from provenance.evidence_node_store import has_external_archives_table
 from provenance.fulltext_extractor_identity import (
     FULLTEXT_EXTRACTOR_NAME,
     resolve_fulltext_extractor_identity,
@@ -282,41 +283,26 @@ def _plan_extraction_promotions(
 ) -> tuple[list[_Promotion], int, bool]:
     if limit < 1:
         return [], 0, False
-    inventory_placeholders = ", ".join("?" for _ in request.inventory_keys)
-    extractor_placeholders = ", ".join("?" for _ in request.extractor_names)
-    rows = conn.execute(
-        "SELECT coverage.assessment_id, "  # nosec B608 -- trusted internal SQL shape; values remain bound
-        "coverage.expected_document_id, coverage.revision, coverage.coverage_status, "
-        "coverage.document_version_id, coverage.extraction_run_id, "
-        "expected.expected_document_key, "
-        "run.extraction_run_id, run.extractor_name, "
-        "run.extractor_code_version, run.completed_at, "
-        "run.extractor_config_sha256, observation.source_url, blob.media_type "
-        "FROM v_source_coverage_current AS coverage "
-        "JOIN v_expected_documents_current AS expected "
-        "ON expected.expected_document_id = coverage.expected_document_id "
-        "JOIN v_source_inventory_current AS inventory "
-        "ON inventory.snapshot_id = expected.snapshot_id "
-        "JOIN evidence_extraction_runs AS run "
-        "ON run.document_version_id = coverage.document_version_id "
-        "JOIN evidence_document_versions AS document "
-        "ON document.document_version_id = coverage.document_version_id "
-        "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
-        "JOIN evidence_source_observations AS observation "
-        "ON observation.observation_id = document.observation_id "
-        f"WHERE inventory.inventory_key IN ({inventory_placeholders}) "
-        "AND coverage.coverage_status IN ('captured', 'extracted', 'indexed') "
-        "AND run.outcome = 'succeeded' "
-        f"AND run.extractor_name IN ({extractor_placeholders}) "
-        "AND EXISTS (SELECT 1 FROM evidence_nodes AS node "
-        "WHERE node.extraction_run_id = run.extraction_run_id "
-        "AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 "
-        "AND (run.extractor_name='fulltext-evidence-backfill' OR EXISTS ("
-        "SELECT 1 FROM v_evidence_current current WHERE current.node_id=node.node_id))) "
-        "ORDER BY coverage.expected_document_id, run.completed_at DESC, "
-        "run.extraction_run_id DESC",
-        (*request.inventory_keys, *request.extractor_names),
-    ).fetchall()
+    inventory_json = json.dumps(list(request.inventory_keys))
+    extractor_json = json.dumps(list(request.extractor_names))
+    if has_external_archives_table(conn):
+        rows = conn.execute(
+            "SELECT coverage.assessment_id, coverage.expected_document_id, coverage.revision, coverage.coverage_status, coverage.document_version_id, coverage.extraction_run_id, expected.expected_document_key, run.extraction_run_id, run.extractor_name, run.extractor_code_version, run.completed_at, run.extractor_config_sha256, observation.source_url, blob.media_type "
+            "FROM v_source_coverage_current AS coverage JOIN v_expected_documents_current AS expected ON expected.expected_document_id = coverage.expected_document_id JOIN v_source_inventory_current AS inventory ON inventory.snapshot_id = expected.snapshot_id JOIN evidence_extraction_runs AS run ON run.document_version_id = coverage.document_version_id JOIN evidence_document_versions AS document ON document.document_version_id = coverage.document_version_id JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 JOIN evidence_source_observations AS observation ON observation.observation_id = document.observation_id "
+            "WHERE inventory.inventory_key IN (SELECT value FROM json_each(?)) AND coverage.coverage_status IN ('captured', 'extracted', 'indexed') AND run.outcome = 'succeeded' AND run.extractor_name IN (SELECT value FROM json_each(?)) "
+            "AND (EXISTS (SELECT 1 FROM evidence_nodes AS node WHERE node.extraction_run_id = run.extraction_run_id AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 AND (run.extractor_name='fulltext-evidence-backfill' OR EXISTS (SELECT 1 FROM v_evidence_current current WHERE current.node_id=node.node_id))) OR (run.extractor_name = 'fulltext-evidence-backfill' AND EXISTS (SELECT 1 FROM evidence_node_external_archives AS archive WHERE archive.extraction_run_id = run.extraction_run_id AND EXISTS (SELECT 1 FROM json_each(archive.archived_node_kinds_json) AS k WHERE k.value <> 'document')))) "
+            "ORDER BY coverage.expected_document_id, run.completed_at DESC, run.extraction_run_id DESC",
+            (inventory_json, extractor_json),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT coverage.assessment_id, coverage.expected_document_id, coverage.revision, coverage.coverage_status, coverage.document_version_id, coverage.extraction_run_id, expected.expected_document_key, run.extraction_run_id, run.extractor_name, run.extractor_code_version, run.completed_at, run.extractor_config_sha256, observation.source_url, blob.media_type "
+            "FROM v_source_coverage_current AS coverage JOIN v_expected_documents_current AS expected ON expected.expected_document_id = coverage.expected_document_id JOIN v_source_inventory_current AS inventory ON inventory.snapshot_id = expected.snapshot_id JOIN evidence_extraction_runs AS run ON run.document_version_id = coverage.document_version_id JOIN evidence_document_versions AS document ON document.document_version_id = coverage.document_version_id JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 JOIN evidence_source_observations AS observation ON observation.observation_id = document.observation_id "
+            "WHERE inventory.inventory_key IN (SELECT value FROM json_each(?)) AND coverage.coverage_status IN ('captured', 'extracted', 'indexed') AND run.outcome = 'succeeded' AND run.extractor_name IN (SELECT value FROM json_each(?)) "
+            "AND EXISTS (SELECT 1 FROM evidence_nodes AS node WHERE node.extraction_run_id = run.extraction_run_id AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 AND (run.extractor_name='fulltext-evidence-backfill' OR EXISTS (SELECT 1 FROM v_evidence_current current WHERE current.node_id=node.node_id))) "
+            "ORDER BY coverage.expected_document_id, run.completed_at DESC, run.extraction_run_id DESC",
+            (inventory_json, extractor_json),
+        ).fetchall()
     approved_by_expected: dict[str, list[sqlite3.Row | tuple[object, ...]]] = {}
     approved_names_by_expected: dict[str, set[str]] = {}
     considered_expected_ids: set[str] = set()

@@ -27,6 +27,7 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sqlite3
@@ -35,8 +36,8 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 
-import pandas as pd
 import requests
+from bs4 import BeautifulSoup
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -73,20 +74,29 @@ def fetch_sp500() -> list[tuple[str, str]]:
     """Return [(ticker, name), ...] from Wikipedia. Raises LoaderError on bad shape."""
     resp = requests.get(SP500_URL, headers={"User-Agent": WIKIPEDIA_UA}, timeout=20)
     resp.raise_for_status()
-    tables = pd.read_html(StringIO(resp.text))
-    if not tables:
+    soup = BeautifulSoup(resp.text, "html.parser")
+    table = soup.find("table")
+    if table is None:
         raise LoaderError("Wikipedia S&P 500 page returned no tables")
-    df = tables[0]
-    if "Symbol" not in df.columns or "Security" not in df.columns:
-        raise LoaderError(
-            f"Wikipedia S&P 500 table missing Symbol/Security columns; got {list(df.columns)}"
-        )
+    header_row = table.find("tr")
+    headers = (
+        [cell.get_text(" ", strip=True) for cell in header_row.find_all(["th", "td"])]
+        if header_row
+        else []
+    )
+    if "Symbol" not in headers or "Security" not in headers:
+        raise LoaderError(f"Wikipedia S&P 500 table missing Symbol/Security columns; got {headers}")
+    symbol_idx = headers.index("Symbol")
+    security_idx = headers.index("Security")
     out: list[tuple[str, str]] = []
-    for _, row in df.iterrows():
-        sym = _normalize(str(row["Symbol"]))
+    for row in table.find_all("tr")[1:]:
+        cells = row.find_all(["td", "th"])
+        if len(cells) <= max(symbol_idx, security_idx):
+            continue
+        sym = _normalize(cells[symbol_idx].get_text(" ", strip=True))
         if sym is None:
             continue
-        name = str(row["Security"]).strip()
+        name = cells[security_idx].get_text(" ", strip=True)
         out.append((sym, name))
     if len(out) < 400:
         raise LoaderError(f"S&P 500 fetch returned only {len(out)} rows; refusing to load")
@@ -97,15 +107,16 @@ def fetch_russell2000() -> list[tuple[str, str]]:
     """Return [(ticker, name), ...] from the GitHub CSV mirror. Raises on bad shape."""
     resp = requests.get(RUSSELL_URL, timeout=30)
     resp.raise_for_status()
-    df = pd.read_csv(StringIO(resp.text))
-    if "Ticker" not in df.columns or "Name" not in df.columns:
-        raise LoaderError(f"Russell 2000 CSV missing Ticker/Name columns; got {list(df.columns)}")
+    reader = csv.DictReader(StringIO(resp.text))
+    fieldnames = list(reader.fieldnames or [])
+    if "Ticker" not in fieldnames or "Name" not in fieldnames:
+        raise LoaderError(f"Russell 2000 CSV missing Ticker/Name columns; got {fieldnames}")
     out: list[tuple[str, str]] = []
-    for _, row in df.iterrows():
-        sym = _normalize(str(row["Ticker"]))
+    for row in reader:
+        sym = _normalize(str(row.get("Ticker") or ""))
         if sym is None:
             continue
-        name = str(row["Name"]).strip()
+        name = str(row.get("Name") or "").strip()
         out.append((sym, name))
     if len(out) < 1500:
         raise LoaderError(f"Russell 2000 fetch returned only {len(out)} rows; refusing to load")
@@ -192,16 +203,17 @@ def main() -> int:
         ap.print_help()
         return 2
 
-    summary: dict[str, object] = {"dry_run": args.dry_run, "sources": {}}
+    sources: dict[str, dict[str, int]] = {}
+    summary: dict[str, object] = {"dry_run": args.dry_run, "sources": sources}
     rows: list[tuple[str, str]] = []
 
     if args.sp500 or args.all:
         sp = fetch_sp500()
-        summary["sources"]["sp500"] = {"fetched": len(sp)}
+        sources["sp500"] = {"fetched": len(sp)}
         rows.extend(sp)
     if args.russell2000 or args.all:
         ru = fetch_russell2000()
-        summary["sources"]["russell2000"] = {"fetched": len(ru)}
+        sources["russell2000"] = {"fetched": len(ru)}
         rows.extend(ru)
 
     # De-duplicate (S&P 500 and R2000 don't overlap by design, but be safe)

@@ -590,7 +590,7 @@ def _expectation_lifecycle(
     records: list[ExpectedDocumentLifecycle] = []
     for key in sorted((*current_by_key, *withdrawals)):
         replay = conn.execute(
-            "SELECT lifecycle_id, revision, supersedes_lifecycle_id "
+            "SELECT lifecycle_id, revision, supersedes_lifecycle_id, knowledge_at, recorded_at "
             "FROM expected_document_lifecycle_revisions "
             "WHERE source_inventory_snapshot_id = ? AND expected_document_key = ?",
             (snapshot_id, key),
@@ -604,9 +604,13 @@ def _expectation_lifecycle(
         if replay is not None:
             lifecycle_revision = int(replay[1])
             supersedes = None if replay[2] is None else str(replay[2])
+            lifecycle_knowledge_at = datetime.fromisoformat(str(replay[3]))
+            lifecycle_recorded_at = datetime.fromisoformat(str(replay[4]))
         else:
             lifecycle_revision = 1 if prior is None else int(prior[1]) + 1
             supersedes = None if prior is None else str(prior[0])
+            lifecycle_knowledge_at = request.reconciled_at
+            lifecycle_recorded_at = request.reconciled_at
         if key in current_by_key:
             status: Literal["expected", "withdrawn_by_authority", "superseded_by_authority"] = (
                 "expected"
@@ -640,8 +644,8 @@ def _expectation_lifecycle(
             "reason_code": reason_code,
             "reason_details": reason_details,
             "effective_at": request.completed_at,
-            "knowledge_at": request.reconciled_at,
-            "recorded_at": request.reconciled_at,
+            "knowledge_at": lifecycle_knowledge_at,
+            "recorded_at": lifecycle_recorded_at,
             "supersedes_lifecycle_id": supersedes,
         }
         seed = _sha_json(semantic)
@@ -659,8 +663,8 @@ def _expectation_lifecycle(
                 reason_code=reason_code,
                 reason_details=reason_details,
                 effective_at=request.completed_at,
-                knowledge_at=request.reconciled_at,
-                recorded_at=request.reconciled_at,
+                knowledge_at=lifecycle_knowledge_at,
+                recorded_at=lifecycle_recorded_at,
                 supersedes_lifecycle_id=supersedes,
             )
         )

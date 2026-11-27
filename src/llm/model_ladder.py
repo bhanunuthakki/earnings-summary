@@ -136,7 +136,9 @@ MODEL_LADDER: dict[str, ModelCost] = {
         "gemini-3-flash-preview", GEMINI, 0.50, 3.00, cached_input_usd_per_mtok=0.05
     ),
     # Official Dec 1, 2026 replacement for deprecated gemini-2.5-flash (verified 2026-11-25).
-    "gemini-3.5-flash-lite": ModelCost("gemini-3.5-flash-lite", GEMINI, 0.30, 2.50),
+    "gemini-3.5-flash-lite": ModelCost(
+        "gemini-3.5-flash-lite", GEMINI, 0.30, 2.50, cached_input_usd_per_mtok=0.03
+    ),
     # Retired from active candidate selection (auto-routes to gemini-3.5-flash-lite
     # effective 2026-12-01); retained in MODEL_LADDER for historical llm_calls cost
     # lookup and replay compatibility.

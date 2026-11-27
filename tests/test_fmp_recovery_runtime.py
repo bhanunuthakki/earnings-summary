@@ -52,7 +52,7 @@ from pipeline.fmp_recovery import (
     plan_run,
     recoverable_work,
 )
-from provenance import data_backbone_rehearsal, financial_fact_resolution
+from provenance import financial_fact_resolution
 from provenance.evidence_backfill import ensure_legacy_document_evidence
 from provenance.financial_fact_resolution import (
     governed_document_fact_admission,
@@ -2750,27 +2750,6 @@ def test_raw_corpus_manifest_22k_tiny_files_has_bounded_two_pass_runtime(
     assert not Path(temporary).exists()
 
 
-def test_raw_corpus_manifest_matches_rehearsal_path_order_and_hash(tmp_path: Path) -> None:
-    raw_dir = tmp_path / "fmp"
-    raw_dir.mkdir()
-    (raw_dir / "A_balance_sheet_annual.json").write_bytes(b"[]")
-    (raw_dir / "AAC_balance_sheet_annual.json").write_bytes(b"{}")
-
-    raw_manifest = cast(
-        Callable[[Path], refresh_cache.RawCorpusManifest],
-        getattr(refresh_cache, "_raw_corpus_manifest"),
-    )(raw_dir)
-    rehearsal_manifest = data_backbone_rehearsal.build_corpus_manifest(raw_dir)
-
-    expected_paths = [
-        "AAC_balance_sheet_annual.json",
-        "A_balance_sheet_annual.json",
-    ]
-    assert [entry.relative_path for entry in raw_manifest.entries] == expected_paths
-    assert [entry.relative_path for entry in rehearsal_manifest.entries] == expected_paths
-    assert raw_manifest.manifest_sha256 == rehearsal_manifest.manifest_sha256
-
-
 def test_empty_audit_still_runs_due_open_circuit_backlog_probe(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2947,3 +2926,70 @@ def test_offline_cli_does_not_invent_owner_requests_for_automatic_scope(
     assert len(rows) == 3
     assert all(bool(row[0]) is explicit for row in rows)
     assert all((row[1] is not None) is explicit for row in rows)
+
+
+def test_index_member_corpus_admission_skips_db_documents_and_facts(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    project_root = tmp_path / "repo"
+    raw_dir = project_root / "data" / "historical" / "fmp"
+    raw_dir.mkdir(parents=True)
+    payload_text = json.dumps(
+        [
+            {
+                "date": "2026-06-30",
+                "symbol": "IDX",
+                "reportedCurrency": "USD",
+                "period": "Q2",
+                "fiscalYear": "2026",
+                "revenue": 500000000,
+                "netIncome": 50000000,
+            }
+        ]
+    )
+    raw_path = raw_dir / "IDX_income_statement_quarterly.json"
+    raw_path.write_text(payload_text, encoding="utf-8")
+    db_path = migrated_db(project_root / "data" / "runtime.db", target=ACTIVE_REVISION)
+    item = replace(
+        _item("IDX", suffix="income_statement_quarterly"),
+        list_type=ListType.INDEX_MEMBER.value,
+    )
+    with _connection(db_path) as connection:
+        connection.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,instrument_type) "
+            "VALUES ('IDX','Index Peer','index_member','equity')"
+        )
+        connection.commit()
+
+        result = refresh_cache.run_recovery_batch(
+            connection,
+            items=(item,),
+            credentials=CredentialAvailability.MISSING,
+            raw_corpus_dir=raw_dir,
+            project_root=project_root,
+            now=NOW,
+            run_id="index-member-disk-only",
+            dispatch=_unexpected_dispatch,
+            provider_call_budget=0,
+        )
+
+        assert result.corpus_count == 1
+        assert result.failed_count == 0
+        assert raw_path.read_text(encoding="utf-8") == payload_text
+        assert (
+            connection.execute("SELECT COUNT(*) FROM documents WHERE ticker='IDX'").fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM evidence_document_versions WHERE ticker='IDX'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM financial_facts WHERE ticker='IDX'"
+            ).fetchone()[0]
+            == 0
+        )

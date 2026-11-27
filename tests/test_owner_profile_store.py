@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -315,18 +315,8 @@ def test_missing_table_degrades(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_migration_0159_upgrade(tmp_path: Path) -> None:
-    from alembic.config import Config
-
-    from alembic import command
-
-    db = tmp_path / "m.db"
-    sqlite3.connect(str(db)).close()
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, "0152_v_thesis_status_stub_substring")
-    command.upgrade(cfg, "0159_owner_profile_facts")
+def test_migration_0159_upgrade(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    db = migrated_db(tmp_path / "m.db")
 
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row

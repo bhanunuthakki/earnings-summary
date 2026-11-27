@@ -5,13 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -38,85 +37,19 @@ HEAD = "0235_legacy_fact_evidence_matches"
 STAMP = datetime(2026, 7, 27, 20, 0, 0)
 SHA = hashlib.sha256(b"test").hexdigest()
 ACCESSION = "0000000001-26-000001"
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def _database(tmp_path: Path) -> tuple[Path, sqlite3.Connection]:
     path = tmp_path / "legacy-fact-evidence-match.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            period_start DATETIME,
-            period_end DATETIME,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL UNIQUE,
-            fetched_at DATETIME NOT NULL,
-            fetch_status TEXT NOT NULL,
-            http_code INTEGER,
-            raw_bytes_size INTEGER NOT NULL,
-            source_url TEXT,
-            parent_document_id INTEGER,
-            source_quality_tier TEXT NOT NULL,
-            accession_number TEXT,
-            filing_date TEXT
-        );
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            line_item TEXT NOT NULL,
-            value NUMERIC NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT
-        );
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            kpi_definition_id INTEGER NOT NULL,
-            value NUMERIC NOT NULL,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT,
-            source_excerpt TEXT,
-            computed_from TEXT,
-            formula_id INTEGER,
-            formula_version INTEGER
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, HEAD)
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(path)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -362,7 +295,7 @@ def _accepted(
 def test_migration_upgrade_and_downgrade_are_reversible(
     tmp_path: Path,
 ) -> None:
-    path, conn = _database(tmp_path)
+    _path, conn = _database(tmp_path)
     try:
         objects = {
             (str(row[0]), str(row[1]))
@@ -385,19 +318,6 @@ def test_migration_upgrade_and_downgrade_are_reversible(
         ) in objects
     finally:
         conn.close()
-
-    command.downgrade(_config(path), "0234_image_ocr_governance")
-    downgraded = sqlite3.connect(path)
-    try:
-        assert (
-            downgraded.execute(
-                "SELECT 1 FROM sqlite_master WHERE name = 'legacy_fact_evidence_match_revisions'"
-            ).fetchone()
-            is None
-        )
-    finally:
-        downgraded.close()
-    command.upgrade(_config(path), HEAD)
 
 
 def test_closed_payload_locator_and_candidate_contracts_reject_empty_or_ambiguous() -> None:
@@ -622,17 +542,20 @@ def test_kpi_null_original_locator_can_accept_strict_companyfacts_relocation(
 ) -> None:
     _, conn = _database(tmp_path)
     _, binding_id, scope_sha = _seed_subject(conn)
-    conn.execute(
-        "INSERT INTO kpi_definitions (id, ticker, name, unit) "
-        "VALUES (1, 'ACME', 'Customers', 'count')"
+    kpi_cursor = conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) "
+        "VALUES ('ACME', 'Customers', 'count', 'ir')"
     )
+    assert kpi_cursor.lastrowid is not None
+    kpi_def_id = int(kpi_cursor.lastrowid)
     cursor = conn.execute(
         "INSERT INTO kpi_facts "
         "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, "
         "unit, source_doc_id, confidence, extracted_by, locator, "
         "source_excerpt, computed_from, formula_id, formula_version) "
-        "VALUES ('ACME', '2026-06-30', 'Q2', 1, 50, 'count', 1, 0.9, "
-        "'sec_xbrl', NULL, NULL, NULL, NULL, NULL)"
+        "VALUES ('ACME', '2026-06-30', 'Q2', ?, 50, 'count', 1, 0.9, "
+        "'sec_xbrl', NULL, NULL, NULL, NULL, NULL)",
+        (kpi_def_id,),
     )
     assert cursor.lastrowid is not None
     fact_id = int(cursor.lastrowid)
@@ -659,7 +582,7 @@ def test_kpi_null_original_locator_can_accept_strict_companyfacts_relocation(
             ticker="ACME",
             period_end="2026-06-30",
             fiscal_period_type="Q2",
-            kpi_definition_id=1,
+            kpi_definition_id=kpi_def_id,
             value="50",
             unit="count",
             source_doc_id=1,

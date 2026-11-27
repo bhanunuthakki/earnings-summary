@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -362,3 +363,83 @@ def test_cli_emits_one_json_result_and_structured_stderr(
     events = [json.loads(line)["event"] for line in captured.err.splitlines()]
     assert events[0] == "sqlite_snapshot_started"
     assert events[-1] == "sqlite_snapshot_finished"
+
+
+def test_verify_quiesced_source_uses_lockstep_without_duplicate_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.db"
+    destination = tmp_path / "snapshot.db"
+    _source_database(source)
+    request = SnapshotRequest(source_path=source, destination_path=destination)
+    expected = create_snapshot(request)
+
+    def reject_backup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("quiesced verification must not allocate a duplicate backup")
+
+    monkeypatch.setattr(sqlite_snapshot, "_backup", reject_backup)
+
+    verified = verify_snapshot_matches_source(request)
+    assert verified.replayed is True
+    assert verified.snapshot_sha256 == expected.snapshot_sha256
+
+    # Header mutations outside backup counters (such as user_version at bytes 60..64)
+    # must still fail closed even when byte size and mtime are unchanged.
+    original_stat = source.stat()
+    with sqlite3.connect(source) as writer:
+        writer.execute("PRAGMA user_version = 42")
+        writer.commit()
+    os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    with pytest.raises(RuntimeError, match="source content or WAL changed"):
+        verify_snapshot_matches_source(request)
+
+
+def test_verify_falls_back_to_sqlite_backup_when_wal_is_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.db"
+    destination = tmp_path / "snapshot.db"
+    _source_database(source)
+    writer = sqlite3.connect(source)
+    try:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("INSERT INTO reported_values (value) VALUES ('wal frame')")
+        writer.commit()
+        assert Path(f"{source}-wal").stat().st_size > 0
+
+        request = SnapshotRequest(source_path=source, destination_path=destination)
+        expected = create_snapshot(request)
+
+        backup_calls: list[Path] = []
+        real_backup: Callable[
+            [sqlite3.Connection, Path, sqlite_snapshot.SnapshotLogger | None], None
+        ] = getattr(sqlite_snapshot, "_backup")
+
+        def record_backup(
+            connection: sqlite3.Connection,
+            path: Path,
+            logger: sqlite_snapshot.SnapshotLogger | None,
+        ) -> None:
+            backup_calls.append(path)
+            real_backup(connection, path, logger)
+
+        monkeypatch.setattr(sqlite_snapshot, "_backup", record_backup)
+        verified = verify_snapshot_matches_source(request)
+        assert verified.snapshot_sha256 == expected.snapshot_sha256
+        assert len(backup_calls) == 1
+    finally:
+        writer.close()
+
+
+def test_apply_verification_pragmas_configures_read_only_cache(tmp_path: Path) -> None:
+    source = tmp_path / "source.db"
+    _source_database(source)
+    conn = sqlite_snapshot.connect_sqlite(source, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        sqlite_snapshot.apply_verification_pragmas(conn)
+        cache_size = conn.execute("PRAGMA cache_size").fetchone()[0]
+        assert cache_size == -262144
+    finally:
+        conn.close()

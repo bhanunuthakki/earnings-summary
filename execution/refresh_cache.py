@@ -1151,6 +1151,31 @@ def _admit_held_corpus(
     expected_raw_dir = project_root / "data" / "historical" / "fmp"
     if Path(os.path.abspath(raw_corpus_dir)) != Path(os.path.abspath(expected_raw_dir)):
         return unavailable(CorpusFailureReason.DOCUMENT_ADMISSION_FAILED)
+    if item.list_type == ListType.INDEX_MEMBER.value:
+        # Screening-universe index members rely on raw FMP JSON files on disk
+        # plus fmp_endpoint_status; skip DB document, evidence, and fact writes.
+        try:
+            after_content, after_stat = held.reread()
+            after_snapshot = _held_snapshot(after_content, after_stat)
+            path_snapshot = _corpus_snapshot(path, root=raw_corpus_dir)
+        except (OSError, RuntimeError, ValueError):
+            return unavailable(CorpusFailureReason.EVIDENCE_CHANGED)
+        raw_unchanged = (
+            after_snapshot == before_snapshot
+            and path_snapshot == before_snapshot
+            and after_stat.st_mtime_ns == before_stat.st_mtime_ns
+            and after_stat.st_size == before_stat.st_size
+        )
+        freshness_unchanged = _last_pulled(connection, item=item) == last_pulled_before
+        if not raw_unchanged or not freshness_unchanged:
+            return unavailable(CorpusFailureReason.EVIDENCE_CHANGED)
+        return WorkOutcome(
+            work_id=planned.work_id,
+            lease_token=planned.lease_token,
+            outcome_code=OutcomeCode.CORPUS_SUCCESS,
+            observed_at=observed_at,
+            corpus_snapshot=planned.corpus_snapshot,
+        )
     try:
         connection.execute("BEGIN IMMEDIATE")
         document_id, _created = register_fmp_snapshot(

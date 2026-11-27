@@ -412,8 +412,10 @@ def _migrated_db(tmp_path: Path) -> Path:
     return db_path
 
 
-def test_migration_0082_creates_tables_and_seeds_judge_budget(tmp_path: Path) -> None:
-    db_path = _migrated_db(tmp_path)
+def test_eval_tables_exist_and_judge_budget_seeded(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = migrated_db(tmp_path / "evals.db")
     conn = sqlite3.connect(db_path)
     tables = {
         r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -426,17 +428,6 @@ def test_migration_0082_creates_tables_and_seeds_judge_budget(tmp_path: Path) ->
     assert row is not None
     assert float(row[0]) == 10.00
     assert row[1] == "warn"
-
-
-def test_migration_0082_tolerates_missing_llm_budgets(tmp_path: Path) -> None:
-    db_path = tmp_path / "bare.db"
-    cfg = _alembic_cfg(db_path)
-    command.stamp(cfg, "0082_expected_earnings_revival")
-    command.upgrade(cfg, "0083_eval_runs")
-    conn = sqlite3.connect(db_path)
-    rev = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-    conn.close()
-    assert rev == "0083_eval_runs"
 
 
 def test_run_eval_end_to_end_persists(

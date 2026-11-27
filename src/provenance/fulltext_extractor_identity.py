@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
+from provenance.evidence_node_store import has_external_archives_table
 from provenance.ooxml_extraction import classify_office_format
 from runtime.deterministic import as_utc, parse_instant
 
@@ -116,6 +117,24 @@ STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
     evidence_namespace="structured-web-archive",
     hierarchy="structured",
 )
+STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
+    name=FULLTEXT_EXTRACTOR_NAME,
+    code_version="fulltext-evidence-backfill@5-row-level-web-archive",
+    config_sha256=hashlib.sha256(
+        b"fulltext-evidence-backfill-config-v5:"
+        b"html-source-dom-paths,exact-decoded-source-char-spans,table-row-hierarchy-no-cell-nodes,"
+        b"row=ordered-cell-unit-separator,table=structural-label,"
+        b"dom-locator-sha256,max-html-depth=256,max-html-nodes=100000,"
+        b"max-html-tag-name=128,"
+        b"zip-sorted-nfc-paths,max-members=2048,max-member-bytes=67108864,"
+        b"max-total-bytes=268435456,max-ratio=1000,supported-inner="
+        b"txt,text,md,csv,json,xml,xsd,xbrl,svg,xhtml,html,htm,strict-utf8,"
+        b"binary-image-replica=same-issuer-accession-current-sealed-snapshot"
+    ).hexdigest(),
+    idempotency_namespace="fulltext-structured-web-archive-v5",
+    evidence_namespace="structured-web-archive",
+    hierarchy="structured",
+)
 
 
 def pdf_table_extractor_code_version(
@@ -155,7 +174,7 @@ def resolve_fulltext_extractor_identity(
         or normalized_media_type in {"text/html", "application/xhtml+xml"}
         or suffix in _HTML_SUFFIXES
     ):
-        return STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR
+        return STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR
     return BASE_FULLTEXT_EXTRACTOR
 
 
@@ -166,6 +185,8 @@ def readable_fulltext_extractor_identities(
 
     if identity == PDF_FULLTEXT_EXTRACTOR:
         return (identity, *RETAINED_PDF_FULLTEXT_EXTRACTORS)
+    if identity == STRUCTURED_WEB_ARCHIVE_ROW_LEVEL_FULLTEXT_EXTRACTOR:
+        return (identity, STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR)
     return (identity,)
 
 
@@ -219,27 +240,48 @@ def select_approved_fulltext_run(
                 int(page[0]) for page in pages if int(page[1]) > 0 and not bool(page[2])
             }
     candidates: list[tuple[str, set[int]]] = []
-    clock_columns = "run.completed_at, node.recorded_at" if cutoff is not None else "NULL, NULL"
+    has_archives = has_external_archives_table(conn)
     for approved in readable_fulltext_extractor_identities(identity):
-        rows = conn.execute(
-            "SELECT run.extraction_run_id, CASE WHEN node.node_kind='pdf_page' "  # nosec B608 -- closed internal column list; all values remain bound
-            "THEN json_extract(node.locator_json, '$.page_number') END, "
-            f"{clock_columns}, "
-            "node.node_kind<>'document' AND length(trim(node.text))>0 "
-            "FROM evidence_extraction_runs run "
-            "JOIN evidence_document_versions document "
-            "ON document.document_version_id=run.document_version_id "
-            "JOIN evidence_nodes node ON node.extraction_run_id=run.extraction_run_id "
-            "WHERE run.document_version_id=? AND run.input_sha256=document.blob_sha256 "
-            "AND run.outcome='succeeded' AND run.extractor_name=? "
-            "AND run.extractor_code_version=? AND run.extractor_config_sha256=?",
-            (
-                document_version_id,
-                approved.name,
-                approved.code_version,
-                approved.config_sha256,
-            ),
-        ).fetchall()
+        if cutoff is not None:
+            rows = conn.execute(
+                "SELECT run.extraction_run_id, CASE WHEN node.node_kind='pdf_page' "
+                "THEN json_extract(node.locator_json, '$.page_number') END, "
+                "run.completed_at, node.recorded_at, "
+                "node.node_kind<>'document' AND length(trim(node.text))>0 "
+                "FROM evidence_extraction_runs run "
+                "JOIN evidence_document_versions document "
+                "ON document.document_version_id=run.document_version_id "
+                "JOIN evidence_nodes node ON node.extraction_run_id=run.extraction_run_id "
+                "WHERE run.document_version_id=? AND run.input_sha256=document.blob_sha256 "
+                "AND run.outcome='succeeded' AND run.extractor_name=? "
+                "AND run.extractor_code_version=? AND run.extractor_config_sha256=?",
+                (
+                    document_version_id,
+                    approved.name,
+                    approved.code_version,
+                    approved.config_sha256,
+                ),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT run.extraction_run_id, CASE WHEN node.node_kind='pdf_page' "
+                "THEN json_extract(node.locator_json, '$.page_number') END, "
+                "NULL, NULL, "
+                "node.node_kind<>'document' AND length(trim(node.text))>0 "
+                "FROM evidence_extraction_runs run "
+                "JOIN evidence_document_versions document "
+                "ON document.document_version_id=run.document_version_id "
+                "JOIN evidence_nodes node ON node.extraction_run_id=run.extraction_run_id "
+                "WHERE run.document_version_id=? AND run.input_sha256=document.blob_sha256 "
+                "AND run.outcome='succeeded' AND run.extractor_name=? "
+                "AND run.extractor_code_version=? AND run.extractor_config_sha256=?",
+                (
+                    document_version_id,
+                    approved.name,
+                    approved.code_version,
+                    approved.config_sha256,
+                ),
+            ).fetchall()
         # Like the seal validator, compare parsed UTC instants at stored precision.
         # Reject the entire run, including when only its document node is late.
         ineligible_run_ids = {
@@ -250,10 +292,44 @@ def select_approved_fulltext_run(
         }
         rows = [row for row in rows if row[4] and str(row[0]) not in ineligible_run_ids]
         run_ids = {str(row[0]) for row in rows}
+        if has_archives:
+            archive_rows = conn.execute(
+                "SELECT run.extraction_run_id, run.completed_at "
+                "FROM evidence_extraction_runs AS run "
+                "JOIN evidence_document_versions AS document "
+                "ON document.document_version_id = run.document_version_id "
+                "JOIN evidence_node_external_archives AS archive "
+                "ON archive.extraction_run_id = run.extraction_run_id "
+                "WHERE run.document_version_id = ? "
+                "AND run.input_sha256 = document.blob_sha256 "
+                "AND run.outcome = 'succeeded' "
+                "AND run.extractor_name = ? "
+                "AND run.extractor_code_version = ? "
+                "AND run.extractor_config_sha256 = ? "
+                "AND EXISTS ("
+                "SELECT 1 FROM json_each(archive.archived_node_kinds_json) AS k "
+                "WHERE k.value <> 'document'"
+                ")",
+                (
+                    document_version_id,
+                    approved.name,
+                    approved.code_version,
+                    approved.config_sha256,
+                ),
+            ).fetchall()
+            for archive_row in archive_rows:
+                arch_run_id = str(archive_row[0])
+                if arch_run_id in ineligible_run_ids:
+                    continue
+                if cutoff is not None and parse_instant(archive_row[1]) > cutoff:
+                    continue
+                run_ids.add(arch_run_id)
         if len(run_ids) > 1:
             raise ValueError("approved_fulltext_extraction_run_ambiguous")
         if not run_ids:
             continue
+        if identity != PDF_FULLTEXT_EXTRACTOR:
+            return next(iter(run_ids))
         page_numbers = {int(row[1]) for row in rows if row[1] is not None}
         if required_pages is not None and not required_pages.issubset(page_numbers):
             continue

@@ -14,7 +14,6 @@ Speaker detection uses explicit regex patterns. It makes no LLM calls.
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import re
 import sqlite3
@@ -24,8 +23,6 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
-
-from pypdf import PdfReader
 
 from compute import evidence_snapshot
 from compute.fiscal_calendar import CALENDAR_YEAR, FILENAME_CALENDARS, period_end_for
@@ -37,6 +34,7 @@ from pipeline.transcript_acquisition import (
     require_persisted_authorized_transcript_artifact,
 )
 from provenance.selection import selected_transcripts_relation
+from runtime.pdf_text import extract_pdf_text
 from transcripts.source_reliability import choose_winner, classify_transcript_source
 
 _FILENAME_RE = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<year>20\d{2})$")
@@ -91,8 +89,7 @@ def sha256_of(path: Path) -> str:
 def read_transcript_text(path: Path) -> str:
     """Extract text from a transcript file (PDF or TXT). Raises on empty output."""
     if path.suffix.lower() == ".pdf":
-        reader = PdfReader(str(path))
-        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        text = extract_pdf_text(path)
     elif path.suffix.lower() == ".txt":
         with open(path, encoding="utf-8") as f:
             text = f.read()
@@ -106,8 +103,7 @@ def read_transcript_text(path: Path) -> str:
 def read_transcript_snapshot(path: Path, payload: bytes) -> str:
     """Extract transcript text from the exact bytes used for evidence identity."""
     if path.suffix.lower() == ".pdf":
-        reader = PdfReader(io.BytesIO(payload))
-        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        text = extract_pdf_text(payload)
     elif path.suffix.lower() == ".txt":
         text = payload.decode("utf-8")
     else:

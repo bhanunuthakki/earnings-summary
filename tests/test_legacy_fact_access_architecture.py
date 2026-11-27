@@ -80,8 +80,6 @@ _RESTATEMENT_HELPER_DEBT = frozenset(
     }
 )
 AUDITED_LEGACY_FACT_READS = {
-    "execution/backfill_fiscal_period_stamps.py": 1,
-    "execution/backfill_ir_deck_locators.py": 2,
     # The source-reviewed repair executor deliberately checks the old row,
     # supersession head, exact inserted successor, replay head, crash-recovery
     # postcondition, and quarantined-old invariant at the legacy boundary. These are repair guards,
@@ -100,8 +98,9 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/mark_kpi_cadence.py": 2,
     "execution/onboard_pending_tickers.py": 2,
     "execution/pressure_test_thesis.py": 1,
-    "execution/prune_misscaled_capture_facts.py": 1,
     "execution/retype_misfiled_sec_ir_docs.py": 2,
+    # Promoted from scratch/: lists recent KPI observations for prompt seeding.
+    "execution/seed_kpi_registry.py": 1,
     "src/allocation/eligibility.py": 1,
     "src/bear_case_grader.py": 1,
     "src/competitive/holdings_sync.py": 1,

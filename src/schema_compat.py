@@ -100,8 +100,11 @@ def _expected_head_cached(root: Path) -> tuple[str, frozenset[str]]:
 @lru_cache(maxsize=8)
 def archived_revisions(project_root: Path) -> frozenset[str]:
     """Known pre-squash revisions, which this checkout no longer upgrades."""
+    archive_dir = project_root / "alembic" / "versions_archived"
+    if not archive_dir.is_dir():
+        return frozenset()
     revisions: set[str] = set()
-    for path in (project_root / "alembic" / "versions_archived").glob("*.py"):
+    for path in archive_dir.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in tree.body:
             if isinstance(node, ast.Assign) and any(

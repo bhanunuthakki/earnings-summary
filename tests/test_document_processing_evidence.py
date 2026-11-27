@@ -13,7 +13,6 @@ import fitz
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from provenance.document_processing_evidence import (
     DocumentProcessingEvidenceIntegrityError,
     DocumentProcessingEvidenceMissingError,
@@ -76,25 +75,9 @@ def _config(path: Path) -> Config:
 @pytest.fixture(scope="session")
 def processing_evidence_template(
     tmp_path_factory: pytest.TempPathFactory,
+    migrated_db: Callable[..., Path],
 ) -> Path:
-    path = tmp_path_factory.mktemp("processing-evidence-schema") / "template.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY, source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY, source_doc_id INTEGER NOT NULL
-        );
-        """
-    )
-    conn.close()
-    base_revision = "0213_decision_draft_provider_id"
-    config = _config(path)
-    command.stamp(config, base_revision)
-    command.upgrade(config, "0248_native_processing_closure_adapters")
-    return path
+    return migrated_db(tmp_path_factory.mktemp("processing-evidence-schema") / "template.db")
 
 
 @pytest.fixture

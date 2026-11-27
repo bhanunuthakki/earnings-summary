@@ -19,8 +19,6 @@ INVESTOR_GRADE_EXECUTION_FILES = (
     "backfill_fulltext_evidence.py",
     "backfill_image_ocr_evidence.py",
     "backfill_ocr_evidence.py",
-    "backfill_pdf_table_evidence.py",
-    "backfill_sec_companyfacts_evidence.py",
     "build_evidence_vector_index.py",
     "build_grounded_search_corpus.py",
     "capture_expected_sec_documents.py",
@@ -32,7 +30,6 @@ INVESTOR_GRADE_EXECUTION_FILES = (
     "promote_embedding_model.py",
     "reconcile_source_coverage.py",
     "refresh_source_coverage_from_evidence.py",
-    "resolve_foreign_identity_blockers.py",
     "sync_ir_source_inventory.py",
     "sync_sec_filing_inventory.py",
     "verify_ir_home_authorities.py",
@@ -59,9 +56,6 @@ CORE_SCHEDULED_DATA_PATHS = (
 # schema preflight the empty scratch DB cannot satisfy. Broad directory-level
 # debt allowlists are prohibited.
 INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
-    # Recovery audit opens only a restored temporary candidate through a
-    # read-only URI; applying portfolio writer policy would mutate the evidence.
-    "execution/audit_deleted_table_recovery.py": 1,
     # Runtime benchmark intentionally measures raw in-memory SQLite against the
     # managed bootstrap, so centralizing these probes would erase the control.
     "execution/benchmark_sqlite_runtime.py": 2,
@@ -79,6 +73,8 @@ INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
     # Coverage reconciliation is a read-only observation CLI over an explicit
     # URI; routing it through the writer runtime would change its contract.
     "execution/reconcile_issuer_document_coverage.py": 1,
+    # Promoted from scratch/: opens explicit --db read-only before registry seeding.
+    "execution/seed_kpi_registry.py": 3,
 }
 SQLITE_RUNTIME_CALLS = 2
 

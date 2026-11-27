@@ -25,7 +25,6 @@ from typing import Protocol, cast
 
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
-from pypdf import PdfReader
 
 from compute.fiscal_calendar import (
     APRIL_FYE as _CAL_APR30,
@@ -587,27 +586,10 @@ def _fingerprint_pdf_pymupdf(path: Path) -> str | None:
     return "\n".join(chunks)[:_PDF_FINGERPRINT_CHARS]
 
 
-def _fingerprint_pdf_pypdf(path: Path) -> str:
-    """First ~2 pages via pypdf (the always-available fallback extractor)."""
-    reader = PdfReader(str(path))
-    chunks: list[str] = []
-    for i in range(min(_PDF_FINGERPRINT_PAGES, len(reader.pages))):
-        chunks.append(reader.pages[i].extract_text() or "")
-    return "\n".join(chunks)[:_PDF_FINGERPRINT_CHARS]
-
-
 def fingerprint_pdf(path: Path) -> str:
-    """Return the first ~2 pages of text from a PDF, capped at 6000 chars.
-
-    Prefers PyMuPDF (fast + robust on heavy decks); falls back to pypdf when
-    PyMuPDF is unavailable or errors, so behavior degrades rather than breaking.
-    Both honor the same 2-page / 6000-char cap, so the downstream classifier sees
-    an equivalent fingerprint regardless of which extractor produced it.
-    """
+    """Return the first ~2 pages of text from a PDF via PyMuPDF, capped at 6000 chars."""
     via_fitz = _fingerprint_pdf_pymupdf(path)
-    if via_fitz is not None:
-        return via_fitz
-    return _fingerprint_pdf_pypdf(path)
+    return via_fitz if via_fitz is not None else ""
 
 
 def fingerprint_xlsx(path: Path) -> str:

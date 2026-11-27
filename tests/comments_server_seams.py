@@ -11,44 +11,47 @@ from __future__ import annotations
 from types import ModuleType
 
 import comments_server
-import comments_server_actions_routes
-import comments_server_advisor_routes
-import comments_server_chat_routes
-import comments_server_comments_routes
-import comments_server_context
-import comments_server_core_routes
-import comments_server_middleware
-import comments_server_ops_routes
-import comments_server_panel_builders
-import comments_server_panel_metrics_routes
-import comments_server_panel_registry
-import comments_server_panel_routes
-import comments_server_shared
-import comments_server_sibling_wiring
-import comments_server_views_discovery_routes
-import comments_server_viewspec_ask_routes
-import comments_server_work_os_routes
 import pytest
+
+from cockpit import (
+    actions_routes,
+    advisor_routes,
+    chat_routes,
+    comments_routes,
+    context,
+    core_routes,
+    middleware,
+    ops_routes,
+    panel_builders,
+    panel_metrics_routes,
+    panel_registry,
+    panel_routes,
+    shared,
+    sibling_wiring,
+    views_discovery_routes,
+    viewspec_ask_routes,
+    work_os_routes,
+)
 
 SERVER_MODULES: tuple[ModuleType, ...] = (
     comments_server,
-    comments_server_shared,
-    comments_server_context,
-    comments_server_middleware,
-    comments_server_panel_registry,
-    comments_server_panel_builders,
-    comments_server_panel_routes,
-    comments_server_core_routes,
-    comments_server_work_os_routes,
-    comments_server_ops_routes,
-    comments_server_panel_metrics_routes,
-    comments_server_viewspec_ask_routes,
-    comments_server_views_discovery_routes,
-    comments_server_actions_routes,
-    comments_server_advisor_routes,
-    comments_server_comments_routes,
-    comments_server_chat_routes,
-    comments_server_sibling_wiring,
+    shared,
+    context,
+    middleware,
+    panel_registry,
+    panel_builders,
+    panel_routes,
+    core_routes,
+    work_os_routes,
+    ops_routes,
+    panel_metrics_routes,
+    viewspec_ask_routes,
+    views_discovery_routes,
+    actions_routes,
+    advisor_routes,
+    comments_routes,
+    chat_routes,
+    sibling_wiring,
 )
 
 

@@ -64,7 +64,7 @@ apply. Source retirement and actual canonical data deletion are separate states.
     ".github",
     ".harden"
   ],
-  "registered_exception_directories": ["outputs", "scratch"],
+  "registered_exception_directories": ["outputs"],
   "forbidden_top_level_directories": [
     "cache",
     "tmp_tests",
@@ -115,6 +115,14 @@ inside an explicit disposable state root.
 The design artifact inventory in `docs/architecture/design_artifact_lifecycle.md`
 distinguishes the active runtime master, tested references and retained alternatives.
 A `mockups/` path does not imply disposable code.
+
+Externalized leaf `table_cell` evidence archives live under the configured state
+root at `data/derived_evidence/<sha2>/<run_sha>.jsonl.gz`, tracked by
+`evidence_node_external_archives`. `src/provenance/evidence_node_store.py` owns
+atomic deterministic archive writes and fail-closed readback verification;
+`execution/compact_evidence_and_coverage.py` is the offline single-writer
+compaction entrypoint. Hermetic tests use the same subtree inside an explicit
+disposable state root.
 
 ## Rules
 

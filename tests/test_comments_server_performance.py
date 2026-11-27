@@ -10,8 +10,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 import comments_server
-from comments_server_panel_cache import PanelCacheBusy, PanelResponseCache
 
+from cockpit.panel_cache import PanelCacheBusy, PanelResponseCache
 from pipeline.portfolio_console_panel import RECORD_FRAGMENTS
 
 

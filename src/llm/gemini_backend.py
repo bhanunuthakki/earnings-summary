@@ -108,7 +108,7 @@ def gemini_http_error_type() -> type[Exception]:
 # fast-classifier purposes map to Hydrogen and driver/analytical purposes map to Neon.
 GEMINI_BACKEND_DEFAULT_MODEL = "gemini-4-neon"
 GEMINI_BACKEND_FAST_MODEL = "gemini-4-hydrogen"
-# Emergency GA fallback if the workhorse model ID returns NotFound:
+# Stable GA fallback if the workhorse model ID returns NotFound:
 # call_gemini self-anneals via live catalog lookup -> _GEMINI_FAST_MODEL_FALLBACK.
 _GEMINI_FAST_MODEL_FALLBACK = "gemini-3.5-flash-lite"
 

@@ -72,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
         default="all",
         help="Process every supported format or only native/legacy Office candidates",
     )
+    parser.add_argument(
+        "--include-table-cells",
+        action="store_true",
+        help="Emit per-fragment HTML table_cell nodes (opt-in v4 extractor for reviewed SEC tables)",
+    )
     parser.add_argument("--apply", action="store_true", help="Persist this bounded batch")
     args = parser.parse_args(argv)
     request = FullTextBackfillRequest(
@@ -86,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         task_id=args.task_id,
         source_lane=args.source_lane,
         format_scope=args.format_scope,
+        include_table_cells=args.include_table_cells,
     )
     role = SQLiteConnectionRole.WRITER if request.apply else SQLiteConnectionRole.READ_ONLY
     conn = connect_sqlite(args.db, role=role, schema_preflight=request.apply)

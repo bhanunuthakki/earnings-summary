@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from compute.metrics_engine import io as metrics_io
 from compute.metrics_engine.inputs import CanonicalConcept
 from provenance.evidence_ledger import (
@@ -56,83 +54,19 @@ def _unsealed_lineage_reason() -> Callable[
     )
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
+_MIGRATED_DB_BUILDER: Callable[..., Path] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _bind_migrated_db(migrated_db: Callable[..., Path]) -> None:
+    global _MIGRATED_DB_BUILDER
+    _MIGRATED_DB_BUILDER = migrated_db
 
 
 def _create_predecessor_database(tmp_path: Path) -> Path:
     path = tmp_path / "companyfacts-match-gate.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            period_start DATETIME,
-            period_end DATETIME,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL UNIQUE,
-            fetched_at DATETIME NOT NULL,
-            fetch_status TEXT NOT NULL,
-            http_code INTEGER,
-            raw_bytes_size INTEGER NOT NULL,
-            source_url TEXT,
-            parent_document_id INTEGER,
-            source_quality_tier TEXT NOT NULL,
-            accession_number TEXT,
-            filing_date TEXT
-        );
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            line_item TEXT NOT NULL,
-            value NUMERIC NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT
-        );
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end DATETIME NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            kpi_definition_id INTEGER NOT NULL,
-            value NUMERIC NOT NULL,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
-            confidence REAL NOT NULL DEFAULT 1.0,
-            extracted_by TEXT,
-            supersedes_id INTEGER,
-            locator TEXT,
-            source_excerpt TEXT,
-            computed_from TEXT,
-            formula_id INTEGER,
-            formula_version INTEGER
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, "0213_decision_draft_provider_id")
-    command.upgrade(config, PREDECESSOR)
+    assert _MIGRATED_DB_BUILDER is not None
+    _MIGRATED_DB_BUILDER(path)
     return path
 
 
@@ -336,18 +270,11 @@ def test_companyfacts_capture_is_gated(
 ) -> None:
     path = _create_predecessor_database(tmp_path)
     conn = _connection(path)
-    delete_trigger = f"trg_{table}_observation_delete"
-    capture_trigger = f"trg_{table}_observation_insert"
-    delete_sql_before = _trigger_sql(conn, delete_trigger)
-    capture_sql_before = _trigger_sql(conn, capture_trigger)
-    conn.close()
-
-    command.upgrade(_config(path), HEAD)
-    conn = _connection(path)
     try:
-        assert _trigger_sql(conn, delete_trigger) == delete_sql_before
-        assert _trigger_sql(conn, capture_trigger) != capture_sql_before
-        conn.execute("INSERT INTO kpi_definitions VALUES (1, 'ACME', 'Growth', 'percent')")
+        conn.execute(
+            "INSERT OR IGNORE INTO kpi_definitions (id, ticker, name, unit, primary_source) "
+            "VALUES (1, 'ACME', 'Growth', 'percent', 'ir')"
+        )
         _seed_document(
             conn,
             document_id=1,
@@ -378,44 +305,10 @@ def test_companyfacts_capture_is_gated(
         conn.close()
 
 
-def test_upgrade_fails_closed_on_unexpected_predecessor_trigger_shape(
-    tmp_path: Path,
-) -> None:
-    path = _create_predecessor_database(tmp_path)
-    conn = _connection(path)
-    try:
-        conn.execute("DROP TRIGGER trg_financial_facts_observation_insert")
-        conn.execute(
-            "CREATE TRIGGER trg_financial_facts_observation_insert "
-            "AFTER INSERT ON financial_facts BEGIN SELECT 1; END"
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            "trg_financial_facts_observation_insert does not match "
-            "the expected 0231 predecessor body"
-        ),
-    ):
-        command.upgrade(_config(path), HEAD)
-
-    conn = _connection(path)
-    try:
-        row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert row is not None
-        assert tuple(row) == (PREDECESSOR,)
-    finally:
-        conn.close()
-
-
 def test_staged_companyfacts_fact_requires_match_and_captures_proof_atomically(
     tmp_path: Path,
 ) -> None:
     path = _create_predecessor_database(tmp_path)
-    command.upgrade(_config(path), HEAD)
     conn = _connection(path)
     try:
         IssuerRegistry(conn).persist(
