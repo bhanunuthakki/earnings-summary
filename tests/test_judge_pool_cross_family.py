@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """P4 cross-family judge pool: DeepSeek (OpenRouter) + Codex (ChatGPT
 membership) alongside Claude/Gemini.
 
@@ -95,7 +96,11 @@ def test_codex_failure_is_recorded_and_raised(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(cb, "_load_wrapper", boom)
     rows: list[dict[str, object]] = []
-    monkeypatch.setattr("llm.ledger.record_llm_call", lambda **kw: rows.append(kw))
+
+    def _rec(**kw: object) -> None:
+        rows.append(kw)
+
+    monkeypatch.setattr("llm.ledger.record_llm_call", _rec)
     with pytest.raises(RuntimeError, match="authentication"):
         cb.call_codex_llm("prompt", purpose="backend_compare_judge")
     assert rows and str(rows[0].get("error", "")).startswith("[codex]")

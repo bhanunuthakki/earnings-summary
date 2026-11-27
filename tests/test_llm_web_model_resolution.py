@@ -69,12 +69,12 @@ def capture_web_cmd(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]
         )
 
     monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    def _rec(**kwargs: object) -> None:
+        state["records"].append(kwargs)
+
     monkeypatch.setattr(cli, "quota_block_active", lambda: None)
-    monkeypatch.setattr(
-        cli,
-        "record_llm_call",
-        lambda **kwargs: state["records"].append(kwargs),
-    )
+    monkeypatch.setattr(cli, "record_llm_call", _rec)
     yield state
 
 
@@ -175,8 +175,11 @@ def test_web_failure_allows_plain_degradation_only_when_grounding_not_required(
     def _failed_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(cmd=["claude"], timeout=1)
 
+    def _plain_fallback(*_args: object, **_kwargs: object) -> str:
+        return "plain fallback"
+
     monkeypatch.setattr(cli.subprocess, "run", _failed_run)
-    monkeypatch.setattr(cli, "_call_claude", lambda *_args, **_kwargs: "plain fallback")
+    monkeypatch.setattr(cli, "_call_claude", _plain_fallback)
 
     result = cli.call_llm_with_web(
         "prompt",
