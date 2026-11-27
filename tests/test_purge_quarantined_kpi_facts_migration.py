@@ -105,8 +105,13 @@ def test_0076_purges_only_quarantined_facts_and_restores_triggers(
             "source_doc_id,supersedes_id"
             ") VALUES (?,'TESTQ',?,'Q4',99001,?,'count',99010,?)",
             [
-                (99100, "2025-09-30", 10.0, None),  # quarantined-only -> purged
-                (99101, "2025-12-31", 11.0, 99100),  # admitted, supersedes 99100 -> kept cleanly
+                (99100, "2025-12-31", 10.0, None),  # quarantined-only -> purged
+                (
+                    99101,
+                    "2025-12-31",
+                    10.0,
+                    99100,
+                ),  # same provenance tuple as 99100 -> kept cleanly
                 (99102, "2025-06-30", 20.0, None),  # mixed (rev1 quarantined -> rev2 admitted)
                 (99103, "2025-03-31", 30.0, None),  # legacy_unknown -> kept intact
             ],
