@@ -55,6 +55,12 @@ def test_classify_reads_banner_source_line() -> None:
         )
         == "aggregator_stockanalysis"
     )
+    assert (
+        classify_transcript_source(
+            Path("transcripts/raw/NVDA_Q1_2026.txt"), _synth_text("google_finance_beta")
+        )
+        == "aggregator_google_finance_beta"
+    )
 
 
 def test_classify_pdf_extension_is_manual_when_no_banner() -> None:
@@ -90,7 +96,13 @@ def test_reliability_rank_ordering_matches_evidence() -> None:
     # as of 2026-07-25 (src/aggregator_sources.py) — equal tier, none still
     # on the old flatten-and-guess heuristic.
     assert reliability_rank(IR_TRANSCRIPT_DOC) > reliability_rank(MANUAL_PDF)
-    assert reliability_rank(MANUAL_PDF) > reliability_rank("yt_dlp_whisper_url")
+    assert reliability_rank(MANUAL_PDF) > reliability_rank("aggregator_google_finance_beta")
+    assert reliability_rank("aggregator_google_finance_beta") == reliability_rank(
+        "google_finance_beta"
+    )
+    assert reliability_rank("aggregator_google_finance_beta") > reliability_rank(
+        "yt_dlp_whisper_url"
+    )
     assert reliability_rank("yt_dlp_whisper_url") > reliability_rank("yt_dlp_whisper_search")
     assert reliability_rank("yt_dlp_whisper_search") > reliability_rank("aggregator_issuer_ir")
     assert reliability_rank("aggregator_issuer_ir") > reliability_rank("aggregator_roic")
@@ -148,4 +160,25 @@ def test_choose_winner_same_tier_same_segments_is_not_a_replace() -> None:
 def test_choose_winner_treats_missing_old_source_as_unknown_legacy() -> None:
     assert choose_winner(
         new_source=MANUAL_PDF, new_segment_count=1, old_source=None, old_segment_count=100
+    )
+
+
+def test_choose_winner_google_finance_beta_beats_qa_only_and_whisper_below_manual_pdf() -> None:
+    assert choose_winner(
+        new_source="aggregator_google_finance_beta",
+        new_segment_count=12,
+        old_source="aggregator_roic",
+        old_segment_count=40,
+    )
+    assert choose_winner(
+        new_source="google_finance_beta",
+        new_segment_count=12,
+        old_source="yt_dlp_whisper_url",
+        old_segment_count=40,
+    )
+    assert not choose_winner(
+        new_source="aggregator_google_finance_beta",
+        new_segment_count=50,
+        old_source=MANUAL_PDF,
+        old_segment_count=7,
     )

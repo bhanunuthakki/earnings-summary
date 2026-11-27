@@ -688,3 +688,107 @@ def test_migration_0071_admits_aggregator_providers_and_blocks_downgrade_when_us
         ).fetchone()
         assert ddl is not None
         assert "CHECK(provider = 'issuer_ir')" in str(ddl[0])
+
+
+def test_migration_0075_admits_google_finance_beta_and_blocks_downgrade_when_used(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: None,
+) -> None:
+    repo_root = tmp_path / "with_google_finance_beta"
+    database = migrated_db(repo_root / "portfolio.db")
+    cfg = _config(database)
+    command.downgrade(cfg, "0075_admit_google_finance_beta_transcript_provider")
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0075_admit_google_finance_beta_transcript_provider",
+        )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies "
+            "(ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
+        )
+        conn.commit()
+
+    def _window(*_args: object, **_kwargs: object) -> ReportedPeriodWindow:
+        return ReportedPeriodWindow(
+            status=ReportedPeriodStatus.COMPLETE,
+            period_ends=(date(2026, 6, 30), date(2026, 3, 31)),
+            snapshot_ids=("sec-1",),
+            fiscal_year_end="12-31",
+            proof_sha256="a" * 64,
+            reason="qualified",
+        )
+
+    from pipeline import transcript_acquisition as acquisition
+
+    monkeypatch.setattr(acquisition, "reported_period_window_from_inventory", _window)
+
+    gfb_req = TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+        canonical_ticker="ACME",
+        fiscal_year=2026,
+        fiscal_quarter=2,
+        as_of=date(2026, 8, 12),
+        source_type=SourceType.IR_DOC,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+        owner_requested=True,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+    )
+    with connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        auth = authorize_transcript_request(conn, gfb_req)
+        artifact = stage_authorized_payload(
+            auth,
+            payload=b"[Operator Instructions]\nWelcome.\n",
+            private_root=staging_root,
+            source_url="https://www.google.com/finance/beta/quote/ACME:NYSE",
+            canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
+        )
+        persist_authorized_transcript_artifact(
+            conn, artifact, project_root=repo_root, trusted_staging_root=staging_root
+        )
+        conn.commit()
+    with pytest.raises(
+        RuntimeError, match="cannot downgrade while google_finance_beta transcript receipts"
+    ):
+        command.downgrade(cfg, "0074_kpi_comparability_bridge_spec")
+
+    clean_db = migrated_db(tmp_path / "clean_0075" / "portfolio.db")
+    clean_cfg = _config(clean_db)
+    command.downgrade(clean_cfg, "0074_kpi_comparability_bridge_spec")
+    with sqlite3.connect(clean_db) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0074_kpi_comparability_bridge_spec",
+        )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        ddl = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='transcript_acquisition_receipts'"
+        ).fetchone()
+        assert ddl is not None
+        assert "CHECK(provider IN ('issuer_ir', 'roic', 'stockanalysis', 'tickertrends'))" in str(
+            ddl[0]
+        )
+    command.upgrade(clean_cfg, "0075_admit_google_finance_beta_transcript_provider")
+    with sqlite3.connect(clean_db) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0075_admit_google_finance_beta_transcript_provider",
+        )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        ddl = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='transcript_acquisition_receipts'"
+        ).fetchone()
+        assert ddl is not None
+        assert "'google_finance_beta'" in str(ddl[0])
