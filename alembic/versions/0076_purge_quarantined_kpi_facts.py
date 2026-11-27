@@ -175,6 +175,15 @@ def _capture_triggers(connection: Connection) -> list[tuple[str, str]]:
     return captured
 
 
+def _capture_provenance_index(connection: Connection) -> str | None:
+    row = connection.exec_driver_sql(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'uq_kpi_facts_provenance'",
+    ).fetchone()
+    if row is not None and row[0] is not None:
+        return str(row[0])
+    return None
+
+
 def upgrade() -> None:
     connection = op.get_bind()
     if not (
@@ -193,6 +202,7 @@ def upgrade() -> None:
     _assert_no_retained_references(connection, fact_ids, ctx_ids)
 
     captured_triggers = _capture_triggers(connection)
+    provenance_index_sql = _capture_provenance_index(connection)
     has_captures = _object_exists(connection, "table", "kpi_legacy_disposition_captures")
     has_attempts = _object_exists(connection, "table", "metric_computation_attempts")
 
@@ -200,6 +210,11 @@ def upgrade() -> None:
     try:
         for trigger_name, _ in captured_triggers:
             connection.exec_driver_sql(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
+        if provenance_index_sql is not None:
+            # A surviving row that supersedes a purged quarantined row with the same
+            # provenance tuple temporarily shares COALESCE(supersedes_id, 0) = 0
+            # between clearing supersedes_id and deleting the quarantined row.
+            connection.exec_driver_sql('DROP INDEX IF EXISTS "uq_kpi_facts_provenance"')
 
         if has_captures:
             for chunk in _chunks(fact_ids):
@@ -246,6 +261,9 @@ def upgrade() -> None:
                     f"WHERE kpi_fact_id IN ({ph})",
                     chunk,
                 )
+
+        if provenance_index_sql is not None:
+            connection.exec_driver_sql(provenance_index_sql)
 
         for _, trigger_sql in captured_triggers:
             connection.exec_driver_sql(trigger_sql)

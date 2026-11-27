@@ -109,6 +109,8 @@ def test_0076_purges_only_quarantined_facts_and_restores_triggers(
                 (99101, "2025-12-31", 11.0, 99100),  # admitted, supersedes 99100 -> kept cleanly
                 (99102, "2025-06-30", 20.0, None),  # mixed (rev1 quarantined -> rev2 admitted)
                 (99103, "2025-03-31", 30.0, None),  # legacy_unknown -> kept intact
+                (99104, "2024-12-31", 40.0, None),  # quarantined predecessor (same provenance)
+                (99105, "2024-12-31", 41.0, 99104),  # admitted successor on same provenance tuple
             ],
         )
         conn.execute(str(insert_trigger))
@@ -158,6 +160,24 @@ def test_0076_purges_only_quarantined_facts_and_restores_triggers(
             status="legacy_unknown",
             reason_code="legacy_unreviewed",
         )
+        _insert_context(
+            conn,
+            ctx_id=991005,
+            kpi_fact_id=99104,
+            revision=1,
+            supersedes_context_id=None,
+            status="quarantined",
+            reason_code="exact_numeric_evidence_candidates",
+        )
+        _insert_context(
+            conn,
+            ctx_id=991006,
+            kpi_fact_id=99105,
+            revision=1,
+            supersedes_context_id=None,
+            status="admitted",
+            reason_code=None,
+        )
 
         _insert_capture(conn, kpi_fact_id=99100, quarantine_context_id=991000)
         _insert_capture(conn, kpi_fact_id=99102, quarantine_context_id=991002)
@@ -183,7 +203,7 @@ def test_0076_purges_only_quarantined_facts_and_restores_triggers(
                 "SELECT id, supersedes_id FROM kpi_facts WHERE ticker = 'TESTQ' ORDER BY id"
             )
         }
-        assert facts == {99101: None, 99102: None, 99103: None}
+        assert facts == {99101: None, 99102: None, 99103: None, 99105: None}
 
         contexts = {
             int(row[0]): (int(row[1]), int(row[2]), str(row[3]))
@@ -197,6 +217,7 @@ def test_0076_purges_only_quarantined_facts_and_restores_triggers(
             991002: (99102, 1, "quarantined"),
             991003: (99102, 2, "admitted"),
             991004: (99103, 1, "legacy_unknown"),
+            991006: (99105, 1, "admitted"),
         }
 
         captures = [
