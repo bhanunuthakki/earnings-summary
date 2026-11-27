@@ -196,6 +196,9 @@ def upgrade() -> None:
     has_captures = _object_exists(connection, "table", "kpi_legacy_disposition_captures")
     has_attempts = _object_exists(connection, "table", "metric_computation_attempts")
 
+    if connection.exec_driver_sql("PRAGMA foreign_keys").scalar():
+        raise RuntimeError("quarantined KPI purge requires the standard Alembic connection")
+
     connection.exec_driver_sql("SAVEPOINT purge_quarantined_kpi_facts")
     try:
         for trigger_name, _ in captured_triggers:
@@ -224,17 +227,21 @@ def upgrade() -> None:
                     chunk,
                 )
 
+        # Delete purged kpi_facts BEFORE clearing surviving rows' supersedes_id to
+        # NULL: a surviving replacement on the same (ticker, period_end,
+        # fiscal_period_type, kpi_definition_id, source_doc_id) would otherwise
+        # collide with the quarantined predecessor on uq_kpi_facts_provenance.
         for chunk in _chunks(fact_ids):
             ph = _placeholders(chunk)
             connection.exec_driver_sql(
-                f"UPDATE kpi_facts SET supersedes_id = NULL WHERE supersedes_id IN ({ph})",  # nosec B608 -- bound integer placeholder list
+                f"DELETE FROM kpi_facts WHERE id IN ({ph})",  # nosec B608 -- bound integer placeholder list
                 chunk,
             )
 
         for chunk in _chunks(fact_ids):
             ph = _placeholders(chunk)
             connection.exec_driver_sql(
-                f"DELETE FROM kpi_facts WHERE id IN ({ph})",  # nosec B608 -- bound integer placeholder list
+                f"UPDATE kpi_facts SET supersedes_id = NULL WHERE supersedes_id IN ({ph})",  # nosec B608 -- bound integer placeholder list
                 chunk,
             )
 

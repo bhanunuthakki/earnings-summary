@@ -229,3 +229,78 @@ def test_0076_purges_only_quarantined_facts_and_restores_triggers(
             _TARGET_REVISION,
         )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_0076_clears_supersedes_id_on_same_doc_replacement_without_unique_collision(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    """Surviving replacement on the same provenance key must not collide on uq_kpi_facts_provenance."""
+    db_path = migrated_db(tmp_path / "same_doc_supersession.db")
+    cfg = _config(db_path)
+    command.downgrade(cfg, _PRIOR_REVISION)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            "INSERT INTO documents (id,ticker,source_type,doc_type,period_end,file_path,sha256,"
+            "fetched_at,fetch_status,raw_bytes_size,source_quality_tier) VALUES "
+            "(99020,'BKNG','ir_doc','ir_press_release','2025-03-31','ir_documents/BKNG/pr.pdf',?,?,'ok',1,'ir_primary')",
+            ("b" * 64, "2026-10-03T00:00:00Z"),
+        )
+        conn.execute(
+            "INSERT INTO kpi_definitions(id,ticker,name,unit,primary_source) "
+            "VALUES (99002,'BKNG','Room Nights','millions','ir_doc')"
+        )
+        insert_trigger = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='trg_kpi_facts_observation_insert'"
+        ).fetchone()[0]
+        conn.execute("DROP TRIGGER trg_kpi_facts_observation_insert")
+        # Row A (quarantined, supersedes_id=NULL) and Row B (admitted, supersedes_id=A)
+        # share the exact (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id).
+        conn.executemany(
+            "INSERT INTO kpi_facts("
+            "id,ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"
+            "source_doc_id,supersedes_id"
+            ") VALUES (?,'BKNG','2025-03-31','Q1',99002,?,'millions',99020,?)",
+            [
+                (99200, 310.0, None),
+                (99201, 319.0, 99200),
+            ],
+        )
+        conn.execute(str(insert_trigger))
+
+        _insert_context(
+            conn,
+            ctx_id=992000,
+            kpi_fact_id=99200,
+            revision=1,
+            supersedes_context_id=None,
+            status="quarantined",
+            reason_code="exact_numeric_evidence_candidates",
+        )
+        _insert_context(
+            conn,
+            ctx_id=992001,
+            kpi_fact_id=99201,
+            revision=1,
+            supersedes_context_id=None,
+            status="admitted",
+            reason_code=None,
+        )
+        conn.commit()
+
+    command.upgrade(cfg, _TARGET_REVISION)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            _TARGET_REVISION,
+        )
+        rows = conn.execute(
+            "SELECT id, value, supersedes_id FROM kpi_facts WHERE ticker = 'BKNG' ORDER BY id"
+        ).fetchall()
+        assert rows == [(99201, 319.0, None)]
+        assert conn.execute("PRAGMA foreign_key_check(kpi_facts)").fetchall() == []
+        assert conn.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
