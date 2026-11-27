@@ -38,13 +38,17 @@ def test_build_matrix_generates_consecutive_quarters_and_detects_gaps(
             "(3,'ACME','ir_doc','ir_presentation','2026-09-30','ir_documents/acme_dk.pdf','3333','2026-11-01','ok',100),"
             "(4,'ACME','ir_doc','ir_transcript','2026-09-30','transcripts/processed/ACME_Q3_2026.txt','4444','2026-11-01','ok',100),"
             "(5,'ACME','ir_doc','ir_transcript','2026-03-31','transcripts/processed/ACME_Q1_2026.txt','5555','2026-05-01','ok',100),"
-            "(6,'RBRK','ir_doc','sec_10q','2026-07-31','filings/rbrk_q2.htm','6666','2026-09-01','ok',100)"
+            "(6,'RBRK','ir_doc','sec_10q','2026-07-31','filings/rbrk_q2.htm','6666','2026-09-01','ok',100),"
+            "(7,'ACME','fmp','fmp_analyst_estimates','2030-12-31','ir_documents/acme_est.json','7777','2026-11-01','ok',100),"
+            "(8,'ACME','llm','llm_summary','2027-01-31','ir_documents/acme_sum.md','8888','2026-11-01','ok',100),"
+            "(9,'ACME','ir_doc','ir_transcript','2027-03-31','transcripts/processed/ACME_FUTURE.txt','9999','2026-11-02','ok',100)"
         )
         conn.execute(
             "INSERT INTO transcripts (id,document_id,ticker,call_date,fiscal_period_type,period_end,"
             "source,has_qa_section,is_active,is_current,recorded_at) VALUES "
             "(10,4,'ACME','2026-11-01','Q3','2026-09-30','ir_transcript_doc',1,1,1,'2026-11-01'),"
-            "(11,5,'ACME','2026-05-01','Q1','2026-03-31','aggregator_roic',0,1,1,'2026-05-01')"
+            "(11,5,'ACME','2026-05-01','Q1','2026-03-31','aggregator_roic',0,1,1,'2026-05-01'),"
+            "(12,9,'ACME','2026-11-02','Q1','2027-03-31','aggregator_roic',0,1,1,'2026-11-02')"
         )
         conn.execute(
             "INSERT INTO transcript_segments (id,transcript_id,seq,speaker,text) "
