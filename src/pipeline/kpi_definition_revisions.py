@@ -1434,11 +1434,15 @@ def lookup_revision_reported_value(
         conn, "kpi_fact_semantic_contexts"
     ):
         return None
+    # Local import avoids an import cycle with provenance.financial_fact_resolution.
+    from provenance.financial_fact_resolution import canonical_fact_relation
+
+    relation = canonical_fact_relation(conn, "kpi_facts")
     iso_period = period_end.isoformat() if isinstance(period_end, date) else str(period_end)[:10]
     fact_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(kpi_facts)").fetchall()}
     supersedes_filter = (
-        "AND NOT EXISTS (SELECT 1 FROM kpi_facts succ WHERE succ.supersedes_id = f.id) "
-        if "supersedes_id" in fact_cols
+        f"AND NOT EXISTS (SELECT 1 FROM {relation.sql} succ WHERE succ.supersedes_id = f.id) "
+        if relation.selection_mode != "resolved_view" and "supersedes_id" in fact_cols
         else ""
     )
     fpt_clause = "AND f.fiscal_period_type = ? " if fiscal_period_type is not None else ""
@@ -1446,7 +1450,7 @@ def lookup_revision_reported_value(
     if fiscal_period_type is not None:
         params.append(fiscal_period_type.value)
     rows = conn.execute(
-        "SELECT f.value FROM kpi_facts f "  # nosec B608 -- fixed column predicates
+        f"SELECT f.value FROM {relation.sql} f "  # nosec B608 -- fixed canonical relation + predicates
         "JOIN kpi_fact_semantic_contexts ksc ON ksc.kpi_fact_id = f.id "
         "AND NOT EXISTS ("
         "  SELECT 1 FROM kpi_fact_semantic_contexts nxt WHERE nxt.supersedes_context_id = ksc.id"

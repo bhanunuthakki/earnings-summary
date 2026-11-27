@@ -33,6 +33,7 @@ from pipeline.kpi_definition_revisions import (
 )
 from provenance.financial_fact_resolution import (
     HistoricalFactAuthorityUnavailableError,
+    canonical_fact_relation,
     canonical_fact_row_ids_as_known,
 )
 
@@ -236,6 +237,7 @@ def load_admitted_observations(
     locator_expr = "fact.locator" if "locator" in fact_cols else "NULL"
     fpt_expr = "fact.fiscal_period_type" if "fiscal_period_type" in fact_cols else "NULL"
 
+    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     fact_marks = ",".join("?" for _ in canonical_fact_ids)
     root_marks = ",".join("?" for _ in roots)
     rows = conn.execute(
@@ -244,7 +246,7 @@ def load_admitted_observations(
         "context.status, context.metric_name_as_reported, context.reported_period_end, "
         "context.accounting_basis, context.consolidation_scope, context.dimensions_json, "
         f"context.unit_scale, context.kpi_definition_revision_id, {period_role_expr}, {pub_lane_expr} "
-        "FROM kpi_facts fact "
+        f"FROM {fact_relation} fact "
         "LEFT JOIN kpi_fact_semantic_contexts context ON context.kpi_fact_id = fact.id "
         "AND datetime(context.knowledge_at) <= datetime(?) "
         "AND datetime(context.created_at) <= datetime(?) "
