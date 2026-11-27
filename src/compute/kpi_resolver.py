@@ -31,6 +31,45 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from compute.kpi_chart_series import (
+    KpiChartBreak as KpiChartBreak,
+)
+from compute.kpi_chart_series import (
+    KpiChartPoint as KpiChartPoint,
+)
+from compute.kpi_chart_series import (
+    KpiChartSegment as KpiChartSegment,
+)
+from compute.kpi_chart_series import (
+    KpiChartSeries as KpiChartSeries,
+)
+from compute.kpi_chart_series import (
+    resolve_kpi_chart_series as resolve_kpi_chart_series,
+)
+from compute.kpi_comparability_resolver import (
+    KpiAsReportedObservation as KpiAsReportedObservation,
+)
+from compute.kpi_comparability_resolver import (
+    KpiAsReportedSeries as KpiAsReportedSeries,
+)
+from compute.kpi_comparability_resolver import (
+    KpiComparableYoYResult as KpiComparableYoYResult,
+)
+from compute.kpi_comparability_resolver import (
+    KpiComparableYoYStatus as KpiComparableYoYStatus,
+)
+from compute.kpi_comparability_resolver import (
+    KpiSeriesReadStatus as KpiSeriesReadStatus,
+)
+from compute.kpi_comparability_resolver import (
+    resolve_cumulative_diff_standalone as resolve_cumulative_diff_standalone,
+)
+from compute.kpi_comparability_resolver import (
+    resolve_kpi_as_reported as resolve_kpi_as_reported,
+)
+from compute.kpi_comparability_resolver import (
+    resolve_kpi_comparable_yoy as resolve_kpi_comparable_yoy,
+)
 from models.facts import Currency, Unit
 from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
