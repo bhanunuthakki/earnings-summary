@@ -124,21 +124,25 @@ class AuthorizedTranscriptArtifact(BaseModel):
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
             raise ValueError("canonical document path must be repository-relative")
         request = authorization.request
-        expected_name = (
-            f"{request.canonical_ticker}_Q{request.fiscal_quarter}_{request.fiscal_year}.txt"
+        expected_stem = (
+            f"{request.canonical_ticker}_Q{request.fiscal_quarter}_{request.fiscal_year}"
+        )
+        expected_names = (
+            f"{expected_stem}.txt",
+            f"{expected_stem}__{self.staged.sha256[:8]}.txt",
         )
         if self.document_id is None:
             if relative.parts[:2] != ("transcripts", "raw"):
                 raise ValueError(
                     "new acquisition must target the canonical raw transcript directory"
                 )
-            if relative.name != expected_name:
+            if relative.name not in expected_names:
                 raise ValueError("canonical document path does not match authorized target")
         else:
             is_canonical_issuer_path = is_canonical_issuer_transcript_path(
                 relative, request.canonical_ticker
             )
-            if relative.name != expected_name and not is_canonical_issuer_path:
+            if relative.name not in expected_names and not is_canonical_issuer_path:
                 raise ValueError("canonical document path does not match authorized target")
         if self.source_url is not None and not (
             self.document_id is not None and _is_retained_reindex_source_url(self.source_url)
@@ -161,6 +165,103 @@ class AuthorizedTranscriptArtifact(BaseModel):
     @property
     def size_bytes(self) -> int:
         return self.staged.size_bytes
+
+
+def _month_end_mmdd(fiscal_year_end_month: int) -> str:
+    next_month = (
+        date(2002, 1, 1)
+        if fiscal_year_end_month == 12
+        else date(2001, fiscal_year_end_month + 1, 1)
+    )
+    last_day = (next_month - timedelta(days=1)).day
+    return f"{fiscal_year_end_month:02d}-{last_day:02d}"
+
+
+def _is_52_53_week_fye(fye: str, fiscal_year_end_month: int) -> bool:
+    """Return True for a 52/53-week close (days 22..<month_end) in `fiscal_year_end_month`."""
+    if not (
+        len(fye) == 5
+        and fye[2] == "-"
+        and fye[:2].isdigit()
+        and fye[3:].isdigit()
+        and int(fye[:2]) == fiscal_year_end_month
+    ):
+        return False
+    day = int(fye[3:])
+    month_end_day = int(_month_end_mmdd(fiscal_year_end_month)[3:])
+    return 22 <= day < month_end_day
+
+
+_REPORTED_WITNESS_DOC_TYPES = (
+    "10-Q",
+    "10-K",
+    "20-F",
+    "40-F",
+    "6-K",
+    "ir_press_release",
+    "ir_presentation",
+    "ir_transcript",
+)
+
+
+def _reported_period_witness_dates(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    as_of: date,
+) -> set[date]:
+    """Collect reported `period_end` dates (<= `as_of`) from canonical facts and reported docs."""
+    from provenance.financial_fact_resolution import canonical_fact_relation
+
+    witnesses: set[date] = set()
+    ticker_upper = ticker.upper()
+    as_of_iso = as_of.isoformat()
+
+    try:
+        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
+        rows = conn.execute(
+            f"SELECT DISTINCT date(period_end) FROM {fact_relation} "  # nosec B608 -- closed internal relation from canonical_fact_relation
+            "WHERE UPPER(ticker)=? AND period_end IS NOT NULL AND date(period_end)<=date(?)",
+            (ticker_upper, as_of_iso),
+        ).fetchall()
+        for row in rows:
+            raw_date = str(row[0] or "").strip()
+            if len(raw_date) >= 10:
+                try:
+                    witnesses.add(date.fromisoformat(raw_date[:10]))
+                except ValueError:
+                    continue
+    except (sqlite3.Error, ValueError):
+        pass
+
+    doc_cols: set[str]
+    try:
+        doc_cols = {
+            str(col[1]).lower() for col in conn.execute("PRAGMA table_info(documents)").fetchall()
+        }
+    except sqlite3.Error:
+        doc_cols = set()
+    if {"ticker", "doc_type", "period_end"} <= doc_cols:
+        placeholders = ",".join("?" for _ in _REPORTED_WITNESS_DOC_TYPES)
+        status_clause = " AND fetch_status='ok'" if "fetch_status" in doc_cols else ""
+        try:
+            doc_rows = conn.execute(
+                "SELECT DISTINCT date(period_end) FROM documents "
+                f"WHERE UPPER(ticker)=? AND period_end IS NOT NULL AND date(period_end)<=date(?) "  # nosec B608 -- placeholder count from constant tuple
+                f"AND doc_type IN ({placeholders}){status_clause}",
+                (ticker_upper, as_of_iso, *_REPORTED_WITNESS_DOC_TYPES),
+            ).fetchall()
+            for row in doc_rows:
+                raw_date = str(row[0] or "").strip()
+                if len(raw_date) >= 10:
+                    try:
+                        witnesses.add(date.fromisoformat(raw_date[:10]))
+                    except ValueError:
+                        continue
+        except sqlite3.Error:
+            pass
+
+    return witnesses
 
 
 def _derive_fiscal_year_end(
@@ -190,13 +291,7 @@ def _derive_fiscal_year_end(
         fye = None
     if fye is not None:
         return fye
-    next_month = (
-        date(2002, 1, 1)
-        if fiscal_year_end_month == 12
-        else date(2001, fiscal_year_end_month + 1, 1)
-    )
-    last_day = (next_month - timedelta(days=1)).day
-    return f"{fiscal_year_end_month:02d}-{last_day:02d}"
+    return _month_end_mmdd(fiscal_year_end_month)
 
 
 def _calendar_reported_period_window(
@@ -213,8 +308,48 @@ def _calendar_reported_period_window(
         ticker=ticker,
         fiscal_year_end_month=fiscal_year_end_month,
     )
-    if fye is None:
+    if fye is None or fiscal_year_end_month is None:
         return None
+    if _is_52_53_week_fye(fye, fiscal_year_end_month):
+        witnesses = _reported_period_witness_dates(conn, ticker=ticker, as_of=as_of)
+        if not witnesses:
+            return None
+        canonical_fye = _month_end_mmdd(fiscal_year_end_month)
+        witnessed_ends: set[date] = set()
+        for fy in range(as_of.year - 4, as_of.year + 2):
+            for fq in (1, 2, 3, 4):
+                try:
+                    q_end = fiscal_quarter_end(
+                        fiscal_year=fy,
+                        fiscal_quarter=fq,
+                        fiscal_year_end=canonical_fye,
+                    )
+                except ValueError:
+                    continue
+                if any(abs((w - q_end).days) <= 7 for w in witnesses):
+                    witnessed_ends.add(q_end)
+        ordered_witnessed = tuple(sorted(witnessed_ends, reverse=True)[:max_quarters])
+        if not ordered_witnessed:
+            return None
+        proof_sha256 = hashlib.sha256(
+            _canonical_json(
+                {
+                    "fiscal_year_end": canonical_fye,
+                    "period_ends": [d.isoformat() for d in ordered_witnessed],
+                    "reason": "fiscal_calendar_52_53_week_witness",
+                    "ticker": ticker.upper(),
+                    "witness_dates": sorted(w.isoformat() for w in witnesses),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        return ReportedPeriodWindow(
+            status=ReportedPeriodStatus.COMPLETE,
+            period_ends=ordered_witnessed,
+            snapshot_ids=(),
+            fiscal_year_end=canonical_fye,
+            proof_sha256=proof_sha256,
+            reason="fiscal_calendar_52_53_week_witness",
+        )
     candidates: set[date] = set()
     for fy in range(as_of.year - 4, as_of.year + 2):
         for fq in (1, 2, 3, 4):
@@ -1095,11 +1230,16 @@ def _resolve_document_period(
 ) -> tuple[int, int] | None:
     """Resolve ``(fiscal_year, fiscal_quarter)`` from legacy filename, ``period_end``, or ISO directory."""
     path_obj = Path(file_path)
-    parts = path_obj.name.rsplit("_", 2)
+    stem = path_obj.stem
+    if "__" in stem:
+        prefix, suffix = stem.rsplit("__", 1)
+        if re.fullmatch(r"[0-9a-f]{8}", suffix):
+            stem = prefix
+    parts = stem.rsplit("_", 2)
     if len(parts) == 3 and parts[1].upper().startswith("Q"):
         try:
             quarter = int(parts[1][1:])
-            year = int(Path(parts[2]).stem)
+            year = int(parts[2])
         except ValueError:
             pass
         else:
@@ -1130,6 +1270,10 @@ def _resolve_document_period(
         (ticker.upper(),),
     ).fetchone()
     fye = str(fye_row[0]).strip() if fye_row and fye_row[0] else "12-31"
+    if len(fye) == 5 and fye[2] == "-" and fye[:2].isdigit():
+        fye_month = int(fye[:2])
+        if 1 <= fye_month <= 12 and _is_52_53_week_fye(fye, fye_month):
+            fye = _month_end_mmdd(fye_month)
     best_period: tuple[int, int] | None = None
     best_delta = 8
     for fy in (pe_date.year - 1, pe_date.year, pe_date.year + 1):

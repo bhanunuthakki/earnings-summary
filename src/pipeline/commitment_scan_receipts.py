@@ -23,7 +23,9 @@ from transcripts.acquisition_semantics import (
     validate_transcript_acquisition_authorization,
 )
 
-_TRANSCRIPT_NAME = re.compile(r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})$")
+_TRANSCRIPT_NAME = re.compile(
+    r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})(?:__(?P<digest>[0-9a-f]{8}))?$"
+)
 _OBSERVATION_SCHEMA = "commitment-segment-observations@1"
 _LEGACY_MANIFEST = '{"schema_version":"legacy-unobserved@0","segments":[]}'
 _LEGACY_MANIFEST_SHA256 = "462e7c3d4eb4e810994e1692e3a50c32b4ddf230ee4c7c9690d81f053fa3d929"  # pragma: allowlist secret -- deterministic manifest digest, not a credential
@@ -574,6 +576,10 @@ def _acquisition_matches_transcript_coordinate(
     return bool(
         acquisition.canonical_document_path.parent == PurePosixPath("transcripts/raw")
         and match is not None
+        and (
+            match.group("digest") is None
+            or match.group("digest") == acquisition.artifact_sha256[:8]
+        )
         and match.group("ticker") == acquisition.canonical_ticker
         and int(match.group("year")) == acquisition.fiscal_year
         and int(match.group("quarter")) == acquisition.fiscal_quarter
@@ -678,6 +684,9 @@ def current_transcript_scan_binding(
             path_matches = (
                 file_path.parent in {processed_parent, raw_parent, evidence_parent}
                 and match is not None
+                and (
+                    match.group("digest") is None or match.group("digest") == transcript_sha256[:8]
+                )
                 and acquisition.canonical_document_path.name == file_path.name
             )
         document_source_url = None if row["source_url"] is None else str(row["source_url"])
