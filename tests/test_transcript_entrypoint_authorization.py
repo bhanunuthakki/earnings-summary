@@ -543,6 +543,190 @@ def test_aggregator_roic_real_index_registration_and_scan_binding(
         assert binding.transcript_acquisition_receipt_id == outcome.result.receipt_id
 
 
+def test_google_finance_beta_receipt_index_ingest_scan_binding_and_coverage_audit(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    darwin_staging_double: Callable[[Any], None],
+) -> None:
+    import index_manager
+    from execution import audit_quarterly_data_coverage as coverage_audit
+    from execution import ingest_transcripts as ingest
+    from pipeline.commitment_scan_receipts import current_transcript_scan_binding
+    from pipeline.transcript_acquisition import (
+        COMBINED_SOURCE_REGIME_IDENTITY,
+        authorize_transcript_request,
+        persist_authorized_transcript_artifact,
+        stage_authorized_payload,
+    )
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+    from transcripts.acquisition_semantics import (
+        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        ExistingArtifactBehavior,
+    )
+
+    darwin_staging_double(ingest)
+    repo_root = tmp_path / "repo"
+    (repo_root / ".tmp").mkdir(parents=True)
+    raw_dir = repo_root / "transcripts" / "raw"
+    raw_dir.mkdir(parents=True)
+    (repo_root / "transcripts" / "processed").mkdir(parents=True)
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    staging_root.mkdir(parents=True)
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker,name,list_type,fiscal_year_end,instrument_type) "
+            "VALUES ('ACME','Acme','portfolio','12-31','equity')"
+        )
+        conn.commit()
+
+    monkeypatch.setattr(index_manager, "PROJECT_ROOT", str(repo_root))
+    monkeypatch.setattr(index_manager, "CACHE_DIR", str(repo_root / ".tmp"))
+    monkeypatch.setattr(
+        index_manager,
+        "TRANSCRIPT_INDEX_PATH",
+        str(repo_root / ".tmp" / "transcript_index.json"),
+    )
+    monkeypatch.setattr(
+        index_manager,
+        "DOCUMENT_INDEX_PATH",
+        str(repo_root / ".tmp" / "document_index.json"),
+    )
+    monkeypatch.setattr(index_manager, "TRANSCRIPTS_RAW_DIR", str(raw_dir))
+    monkeypatch.setattr(
+        index_manager,
+        "TRANSCRIPTS_PROCESSED_DIR",
+        str(repo_root / "transcripts" / "processed"),
+    )
+
+    transcript_body = (
+        "[Operator Instructions]\n"
+        "Good morning, and welcome to the Acme Q2 2026 conference call.\n"
+        "Jane Smith, Chief Financial Officer, Acme\n"
+        "1m 10s\n"
+        "Revenue grew 18% year over year with strong operating leverage across every segment. "
+        + ("Detailed prepared remarks commentary on growth and margins. " * 40)
+        + "\n"
+        "[Operator Instructions]\n"
+        "28m 16s\n"
+        "One moment for our first question from BMO Capital Markets.\n"
+        "Étienne Ricard, Analyst, BMO Capital Markets\n"
+        "28m 41s\n"
+        "Thanks for taking my question. How are you thinking about capital allocation?\n"
+        "Jane Smith, Chief Financial Officer, Acme\n"
+        "29m 15s\n"
+        "Hi, Étienne. We remain disciplined on buybacks and reinvestment.\n"
+    )
+    payload = transcript_body.encode("utf-8")
+    raw_file = raw_dir / "ACME_Q2_2026.txt"
+    raw_file.write_bytes(payload)
+
+    request = TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+        canonical_ticker="ACME",
+        fiscal_year=2026,
+        fiscal_quarter=2,
+        as_of=date(2026, 8, 12),
+        source_type=SourceType.IR_DOC,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+        owner_requested=True,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+    )
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
+        auth = authorize_transcript_request(conn, request)
+        assert auth.status is TranscriptAuthorizationStatus.AUTHORIZED
+        artifact = stage_authorized_payload(
+            auth,
+            payload=payload,
+            private_root=staging_root,
+            source_url="https://www.google.com/finance/beta/quote/ACME:NYSE",
+            canonical_document_path=Path("transcripts/raw/ACME_Q2_2026.txt"),
+        )
+        receipt_id = persist_authorized_transcript_artifact(
+            conn,
+            artifact,
+            project_root=repo_root,
+            trusted_staging_root=staging_root,
+        )
+        conn.commit()
+
+    index_manager.register_transcript(
+        "ACME",
+        2026,
+        "Q2",
+        source="aggregator_google_finance_beta",
+        filepath="ACME_Q2_2026.txt",
+        has_qa=True,
+        acquisition_receipt=artifact,
+    )
+    with pytest.raises(
+        ValueError, match="transcript index metadata does not match acquisition receipt"
+    ):
+        index_manager.register_transcript(
+            "ACME",
+            2026,
+            "Q2",
+            source="issuer_ir",
+            filepath="ACME_Q2_2026.txt",
+            acquisition_receipt=artifact,
+        )
+
+    monkeypatch.setattr(ingest, "PROJECT_ROOT", repo_root)
+    monkeypatch.setattr(
+        ingest,
+        "_TRANSCRIPT_DIRS",
+        (repo_root / "transcripts" / "processed", raw_dir),
+    )
+    monkeypatch.setattr(ingest, "current_utc_date", lambda: date(2026, 8, 12))
+    monkeypatch.setattr(
+        sys, "argv", ["ingest_transcripts.py", "--db", str(db_path), "--ticker", "ACME"]
+    )
+    assert ingest.main() == 0
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, document_id, source, has_qa_section FROM transcripts WHERE ticker='ACME'"
+        ).fetchone()
+        assert row is not None
+        assert row["source"] == "aggregator_google_finance_beta"
+        assert row["has_qa_section"] == 1
+        speakers = [
+            str(r["speaker"])
+            for r in conn.execute(
+                "SELECT speaker FROM transcript_segments WHERE transcript_id=? ORDER BY seq",
+                (int(row["id"]),),
+            ).fetchall()
+        ]
+        assert "Étienne Ricard" in speakers
+        assert "Jane Smith" in speakers
+        assert "Operator" in speakers
+
+        binding = current_transcript_scan_binding(conn, int(row["id"]))
+        assert binding is not None
+        assert binding.document_id == int(row["document_id"])
+        assert binding.transcript_acquisition_receipt_id == receipt_id
+
+        evidence = coverage_audit._transcript_evidence(  # pyright: ignore[reportPrivateUsage]
+            conn,
+            repo_root=repo_root,
+            ticker="ACME",
+            fiscal_year=2026,
+            fiscal_quarter=2,
+            period_end=date(2026, 6, 30),
+            cutoff_at=datetime.now(UTC).replace(year=2099),
+        )
+        assert evidence["complete"] is True
+        assert evidence["receipt_id"] == receipt_id
+        assert evidence["verification_reason_codes"] == []
+
+
 def test_backfill_split_root_acquisition_stages_and_receipts_under_state_root(
     tmp_path: Path,
     migrated_db: Callable[..., Path],

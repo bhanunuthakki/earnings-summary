@@ -18,6 +18,7 @@ import json
 import re
 import sqlite3
 import sys
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -35,6 +36,7 @@ from pipeline.transcript_acquisition import (
 )
 from provenance.selection import selected_transcripts_relation
 from runtime.pdf_text import extract_pdf_text
+from transcripts.acquisition_semantics import TranscriptProvider
 from transcripts.source_reliability import choose_winner, classify_transcript_source
 
 _FILENAME_RE = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<year>20\d{2})$")
@@ -113,26 +115,93 @@ def read_transcript_snapshot(path: Path, payload: bytes) -> str:
     return text
 
 
-# Speaker patterns. Two conventions across the corpus:
-#   (a) "...end of prior sentence.\n David Velez : Thank you, ..."  (NU IR PDFs)
-#   (b) "...end.\n\nSundar Pichai\nThanks Jim, ..."                  (other PDFs)
+# Speaker patterns. Three conventions across the corpus:
+#   (a) "...end of prior sentence.\n David Velez : Thank you, ..."        (NU IR PDFs)
+#   (b) "...end.\n\nSundar Pichai\nThanks Jim, ..."                      (other PDFs)
+#   (c) "...end.\nÉtienne Ricard, Analyst, BMO Capital Markets\n48m 5s"   (Google Finance Beta / Quartr)
 # Required: name appears at line start (with optional leading whitespace) and is
-# either (i) followed by a colon + whitespace (inline body, case a), or
-# (ii) followed by a newline (body next paragraph, case b).
-# Real speaker names are multi-word ("Sundar Pichai", "David Velez"), so we
-# require >=2 capitalized tokens to exclude single-word sentence starters
-# ("This:", "Studio", "Total"). "Operator" is handled by a separate pattern.
-_SPEAKER_NAME_PATTERN = (
-    r"[A-Z][A-Za-z]+"  # first capitalized word
-    r"(?:\s+[A-Z][A-Za-z'\-]+){1,3}"  # 1-3 more capitalized tokens
+# either (i) followed by a colon + whitespace (inline body, case a),
+# (ii) followed by a newline (body next paragraph, case b), or
+# (iii) followed by comma-delimited title/firm metadata ending at line end (case c).
+# Real speaker names are multi-word ("Sundar Pichai", "Étienne Ricard", "C.C. Wei",
+# "Luis von Ahn"), so we require >=2 tokens to exclude single-word sentence starters
+# ("This:", "Studio", "Total"). "Operator" / "[Operator Instructions]" are handled
+# by a separate pattern.
+_LATIN_UPPER = "".join(
+    chr(cp) for cp in range(0x0041, 0x0250) if unicodedata.category(chr(cp)) == "Lu"
 )
-_OPERATOR_RE = re.compile(r"(?:^|\n)[ \t]*(?P<name>Operator|OPERATOR)[ \t]*(?::[ \t]+|\n)")
-_SPEAKER_RE = re.compile(rf"(?:^|\n)[ \t]*(?P<name>{_SPEAKER_NAME_PATTERN})[ \t]*(?::[ \t]+|\n)")
+_LATIN_LETTER = "".join(
+    chr(cp) for cp in range(0x0041, 0x0250) if unicodedata.category(chr(cp)) in {"Lu", "Ll", "Lt"}
+)
+_NAME_FIRST_TOKEN = (
+    rf"(?:[{_LATIN_UPPER}][{_LATIN_LETTER}'\-]+|[{_LATIN_UPPER}]\.(?:[{_LATIN_UPPER}]\.)?)"
+)
+_NAME_PARTICLE = r"(?:(?:von|van|de|del|della|der|la|le|da|di|du|dos|do)[ \t]+)"
+_NAME_NEXT_TOKEN = (
+    rf"(?:{_NAME_PARTICLE}?[{_LATIN_UPPER}][{_LATIN_LETTER}'\-]+\.?|[{_LATIN_UPPER}]\.)"
+)
+_SPEAKER_NAME_PATTERN = rf"{_NAME_FIRST_TOKEN}(?:[ \t]+{_NAME_NEXT_TOKEN}){{1,4}}"
+_SPEAKER_META_PATTERN = (
+    rf",[ \t]+[{_LATIN_UPPER}][^\n,?!;:]{{0,119}}"
+    rf"(?:,[ \t]+[{_LATIN_LETTER}&][^\n,?!;:]{{0,119}}){{0,3}}"
+)
+_ALLOWED_META_DOT_SUFFIXES = (
+    "Inc.",
+    "Ltd.",
+    "Corp.",
+    "Co.",
+    "LLC.",
+    "LLP.",
+    "PLC.",
+    "Plc.",
+    "plc.",
+    "S.A.",
+    "L.P.",
+)
+_PROSE_GREETING_PREFIXES = frozenset(
+    {
+        "Good",
+        "Great",
+        "Hello",
+        "Hey",
+        "Hi",
+        "No",
+        "Okay",
+        "Please",
+        "Sure",
+        "Thank",
+        "Thanks",
+        "Welcome",
+        "Yes",
+    }
+)
+_OPERATOR_RE = re.compile(
+    r"(?:^|\n)[ \t]*(?P<name>Operator|OPERATOR|\[Operator Instructions\])[ \t]*(?::[ \t]+|(?=\n|$))"
+)
+_SPEAKER_RE = re.compile(
+    rf"(?:^|\n)[ \t]*(?P<name>{_SPEAKER_NAME_PATTERN})"
+    rf"(?:(?P<meta>{_SPEAKER_META_PATTERN})[ \t]*(?=\n|$)|[ \t]*(?::[ \t]+|(?=\n|$)))"
+)
+
+
+def _valid_speaker_meta(meta: str | None) -> bool:
+    """Reject comma-delimited prose fragments masquerading as title/firm headers."""
+    if meta is None:
+        return True
+    stripped = meta.rstrip()
+    if stripped.endswith(".") and not stripped.endswith(_ALLOWED_META_DOT_SUFFIXES):
+        return False
+    first_clause = stripped.lstrip(", \t").split(",", 1)[0].strip()
+    first_word = first_clause.split(" ", 1)[0] if first_clause else ""
+    return first_word not in _PROSE_GREETING_PREFIXES
 
 
 def _normalize_speaker(name: str) -> str:
     """Collapse internal whitespace runs (PDF extraction artifact) and trim."""
-    return re.sub(r"\s+", " ", name).strip()
+    normalized = re.sub(r"\s+", " ", name).strip()
+    if normalized == "[Operator Instructions]":
+        return "Operator"
+    return normalized
 
 
 # Per-ticker whitelist of valid speakers. Tickers whose transcripts mention
@@ -203,6 +272,8 @@ def segment_by_speaker(
             )
         )
     for m in _SPEAKER_RE.finditer(text):
+        if not _valid_speaker_meta(m.group("meta")):
+            continue
         ns = m.start("name")
         if any(sm.name_start == ns for sm in matches):
             continue
@@ -273,6 +344,17 @@ _OPERATOR_ANALYST_INTRO_RE = re.compile(
 )
 _MIN_OPERATOR_INTROS_FOR_QA = 2
 
+# Google Finance Beta / Quartr verbatim transcripts identify sell-side analyst
+# turns with standalone comma-delimited headers such as:
+#   "Brian Nowak, Analyst, Morgan Stanley"
+#   "Étienne Ricard, Analyst, BMO Capital Markets"
+#   "Chris Schott, Senior Analyst of US Diversified Biopharma, JPMorgan"
+_QA_ANALYST_HEADER_RE = re.compile(
+    rf"(?:^|\n)[ \t]*(?P<name>{_SPEAKER_NAME_PATTERN})"
+    rf"(?P<meta>,[ \t]+(?:[{_LATIN_UPPER}][^\n,?!;:]{{0,119}})?\bAnalyst\b[^\n,?!;:]{{0,119}}"
+    rf"(?:,[ \t]+[{_LATIN_LETTER}&][^\n,?!;:]{{0,119}}){{0,3}})[ \t]*(?=\n|$)"
+)
+
 
 class QASectionStatus(StrEnum):
     """Tri-state verdict on whether a transcript contains analyst Q&A.
@@ -308,10 +390,11 @@ class QADetectionResult:
 def detect_qa_section(text: str) -> QADetectionResult:
     """Inspect transcript text for analyst Q&A content.
 
-    Looks for any of three structural signals:
+    Looks for any of four structural signals:
       1. The CallStreet `QUESTION AND ANSWER SECTION` header.
       2. CallStreet `<Q – ...>` analyst speaker tags.
       3. >=2 operator analyst-introduction phrases ("next question is from X").
+      4. Standalone analyst speaker header lines ("<Name>, ...Analyst..., <Firm>").
 
     Any single signal at the required threshold is sufficient for PRESENT.
     """
@@ -326,6 +409,8 @@ def detect_qa_section(text: str) -> QADetectionResult:
     operator_intros = len(_OPERATOR_ANALYST_INTRO_RE.findall(text))
     if operator_intros >= _MIN_OPERATOR_INTROS_FOR_QA:
         signals.append(f"operator_intros={operator_intros}")
+    if any(_valid_speaker_meta(m.group("meta")) for m in _QA_ANALYST_HEADER_RE.finditer(text)):
+        signals.append("analyst_speaker_header")
 
     status = QASectionStatus.PRESENT if signals else QASectionStatus.ABSENT
     return QADetectionResult(status=status, signals=tuple(signals))
@@ -441,6 +526,23 @@ def _index_source_hint(project_root: Path, ticker: str, year: int, quarter: int)
         if isinstance(source, str) and source:
             return source
     return None
+
+
+def _resolve_source_hint(
+    project_root: Path,
+    parsed: ParsedFilename,
+    authorized_artifact: AuthorizedTranscriptArtifact | None,
+) -> str | None:
+    """Prefer the transcript index hint, falling back to non-issuer receipt provenance."""
+    hint = _index_source_hint(
+        project_root, parsed.ticker, parsed.fiscal_year_label, parsed.quarter_idx
+    )
+    if hint is not None or authorized_artifact is None:
+        return hint
+    provider = authorized_artifact.authorization.request.provider
+    if provider is TranscriptProvider.ISSUER_IR:
+        return None
+    return f"aggregator_{provider.value}"
 
 
 @dataclass(frozen=True)
@@ -752,9 +854,7 @@ def _ingest_one(
         source = classify_transcript_source(
             file_path,
             text,
-            index_hint=_index_source_hint(
-                project_root, parsed.ticker, parsed.fiscal_year_label, parsed.quarter_idx
-            ),
+            index_hint=_resolve_source_hint(project_root, parsed, authorized_artifact),
         )
         decision = _resolve_period_conflict(
             conn,
@@ -807,9 +907,7 @@ def _ingest_one(
     source = classify_transcript_source(
         file_path,
         text,
-        index_hint=_index_source_hint(
-            project_root, parsed.ticker, parsed.fiscal_year_label, parsed.quarter_idx
-        ),
+        index_hint=_resolve_source_hint(project_root, parsed, authorized_artifact),
     )
 
     decision = _resolve_period_conflict(
