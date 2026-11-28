@@ -281,3 +281,65 @@ def test_choose_winner_equal_qa_availability_falls_back_to_source_tier_and_segme
         old_segment_count=50,
         old_has_qa=False,
     )
+
+
+def test_choose_winner_receipted_ir_doc_tiebreaker() -> None:
+    """On an exact Q&A + tier + segment-count tie, receipted ir_doc beats unreceipted legacy."""
+    assert choose_winner(
+        new_source="aggregator_roic",
+        new_segment_count=21,
+        new_has_qa=True,
+        old_source="aggregator_roic",
+        old_segment_count=21,
+        old_has_qa=True,
+        new_is_receipted_ir_doc=True,
+        old_is_receipted_ir_doc=False,
+    )
+    assert not choose_winner(
+        new_source="aggregator_roic",
+        new_segment_count=21,
+        new_has_qa=True,
+        old_source="aggregator_roic",
+        old_segment_count=21,
+        old_has_qa=True,
+        new_is_receipted_ir_doc=True,
+        old_is_receipted_ir_doc=True,
+    )
+    assert not choose_winner(
+        new_source="aggregator_roic",
+        new_segment_count=21,
+        new_has_qa=True,
+        old_source="aggregator_roic",
+        old_segment_count=21,
+        old_has_qa=True,
+        new_is_receipted_ir_doc=False,
+        old_is_receipted_ir_doc=False,
+    )
+    # Lower tier with a receipt still loses to higher tier; fewer segments still loses on same tier;
+    # confirmed Q&A still beats unreceipted-tiebreaker without Q&A.
+    assert not choose_winner(
+        new_source="aggregator_roic",
+        new_segment_count=21,
+        old_source=MANUAL_PDF,
+        old_segment_count=7,
+        new_is_receipted_ir_doc=True,
+        old_is_receipted_ir_doc=False,
+    )
+    assert not choose_winner(
+        new_source="aggregator_roic",
+        new_segment_count=20,
+        old_source="aggregator_roic",
+        old_segment_count=21,
+        new_is_receipted_ir_doc=True,
+        old_is_receipted_ir_doc=False,
+    )
+    assert not choose_winner(
+        new_source="aggregator_roic",
+        new_segment_count=21,
+        new_has_qa=False,
+        old_source="aggregator_roic",
+        old_segment_count=21,
+        old_has_qa=True,
+        new_is_receipted_ir_doc=True,
+        old_is_receipted_ir_doc=False,
+    )
