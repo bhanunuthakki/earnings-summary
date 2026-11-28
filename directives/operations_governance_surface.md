@@ -3363,3 +3363,17 @@ closed. A derived KPI row anchored to a SEC CompanyFacts snapshot is skipped and
 reported as `companyfacts_derived_fact_requires_input_lineage`, matching the
 existing capture refusal, instead of aborting the whole refresh. No surface
 change: no operator action, job, store, provider or schema is added.
+
+## Wave 2 dead-subsystem schema and CLI retirement (2026-11-28)
+
+Disposition: **retired unused offline CLIs and 27 verified-empty tables; no active cockpit or scheduled surface changed**.
+Migration `0080_retire_unused_ask_audit_search_fact_archive_population_tables` drops 27
+zero-row tables (110 triggers) and 5 views across four unused subsystems (sealed/shadow Ask
+audit & heterogeneous retrieval traces, fact-search v2 projections, archive generation
+catalog, and population cutover ledgers) with strict `COUNT(*) == 0` and dependency
+preflights. The 6 retired offline CLIs (`audit_ask_retrieval_cutover.py`,
+`audit_data_cutover_readiness.py`, `evaluate_population_cutover.py`,
+`generate_ask_retrieval_production_scopes.py`, `populate_retrieval_runtime.py`,
+`register_archive_generation.py`) and their 7 backing modules are removed. Active Ask
+(`grounded` and `legacy` modes), `/source/version/<id>`, and all scheduled jobs remain
+unchanged.

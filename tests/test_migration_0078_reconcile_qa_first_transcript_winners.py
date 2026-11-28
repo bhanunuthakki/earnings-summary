@@ -96,9 +96,8 @@ def test_0078_reconciles_qa_first_winners_while_keeping_triggers_active(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = migrated_db(tmp_path / "portfolio.db")
+    db_path = migrated_db(tmp_path / "portfolio.db", target=_PRIOR_REVISION)
     cfg = _config(db_path)
-    command.downgrade(cfg, _PRIOR_REVISION)
 
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
@@ -370,9 +369,8 @@ def test_0078_empty_db_is_noop_and_preserves_triggers(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = migrated_db(tmp_path / "empty.db")
+    db_path = migrated_db(tmp_path / "empty.db", target=_PRIOR_REVISION)
     cfg = _config(db_path)
-    command.downgrade(cfg, _PRIOR_REVISION)
     with sqlite3.connect(db_path) as conn:
         triggers_before = _trigger_sqls(conn)
 

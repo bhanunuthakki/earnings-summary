@@ -178,12 +178,13 @@ def _seed_run_with_nodes(
 def test_migration_0072_table_constraints_downgrade_and_reupgrade(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    from schema_compat import expected_head
-
-    db_path = migrated_db(tmp_path / "mig0072.db")
-    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER) as conn:
+    db_path = migrated_db(
+        tmp_path / "mig0072.db",
+        target="0072_evidence_node_external_archives",
+    )
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False) as conn:
         row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert row is not None and tuple(row) == (expected_head(),)
+        assert row is not None and tuple(row) == ("0072_evidence_node_external_archives",)
         run_id, output_sha = _seed_run_with_nodes(conn)
 
         # Reject path traversal, absolute path, bad sha, count <= 0, non-array kinds.
@@ -507,8 +508,8 @@ def test_migration_0073_drops_redundant_indexes_reversibly_and_preserves_audited
 
     from schema_compat import expected_head
 
-    db_path = migrated_db(tmp_path / "mig0073.db")
-    with sqlite3.connect(db_path) as conn:
+    head_db_path = migrated_db(tmp_path / "mig0073_head.db")
+    with sqlite3.connect(head_db_path) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
             expected_head(),
         )
@@ -523,6 +524,7 @@ def test_migration_0073_drops_redundant_indexes_reversibly_and_preserves_audited
         assert "ix_fact_derivation_edges_v2_output" in head_indexes
 
     # Downgrade to 0072 restores every dropped index cleanly.
+    db_path = migrated_db(tmp_path / "mig0073.db", target="0073_drop_redundant_indexes")
     cfg = _alembic_config(db_path)
     command.downgrade(cfg, "0072_evidence_node_external_archives")
     with sqlite3.connect(db_path) as conn:

@@ -56,7 +56,7 @@ def test_empty_current_schema_has_missing_evidence(
     assert "source_inventory_missing" in issuer.acquisition.blockers
     assert issuer.extraction.state == "missing"
     assert issuer.semantic_admission.state == "missing"
-    assert issuer.consumer_readiness.state == "missing"
+    assert issuer.consumer_readiness.state == "unknown"
 
 
 def test_inventory_is_issuer_and_clock_scoped_and_does_not_prove_extraction(

@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 HEAD = expected_head()
 SCHEDULE_CLASS_REVISION = "0028_remove_processing_tier_and_rename_research_tasks"
 RETAINED_TABLES = {
-    "archive_generations",
     "ask_exchange_artifacts",
     "ask_exchanges",
     "ask_grounding_traces",

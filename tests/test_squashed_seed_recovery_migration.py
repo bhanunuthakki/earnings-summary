@@ -19,7 +19,7 @@ _RECOVERY_REVISION = "0003_restore_baseline_defaults"
 _ACTIVE_HEAD = expected_head()
 # The newest revision whose downgrade refuses. Reversible revisions above it may
 # step down first; the refusal must still keep every retired-data guarantee.
-_IRREVERSIBLE_BARRIER = "0069_retire_obsolete_input_history"
+_IRREVERSIBLE_BARRIER = "0080_retire_unused_ask_audit_search_fact_archive_population_tables"
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:
