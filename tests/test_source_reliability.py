@@ -11,7 +11,9 @@ from transcripts.source_reliability import (
     UNKNOWN_LEGACY,
     choose_winner,
     classify_transcript_source,
+    qa_availability_rank,
     reliability_rank,
+    transcript_winner_key,
 )
 
 
@@ -181,4 +183,101 @@ def test_choose_winner_google_finance_beta_beats_qa_only_and_whisper_below_manua
         new_segment_count=50,
         old_source=MANUAL_PDF,
         old_segment_count=7,
+    )
+
+
+def test_qa_availability_rank_prioritizes_confirmed_qa_only() -> None:
+    assert qa_availability_rank(True) == 1
+    assert qa_availability_rank(1) == 1
+    assert qa_availability_rank(False) == 0
+    assert qa_availability_rank(0) == 0
+    assert qa_availability_rank(None) == 0
+
+
+def test_transcript_winner_key_orders_by_qa_then_tier_then_segments() -> None:
+    qa_roic = transcript_winner_key(has_qa_section=True, source="aggregator_roic", segment_count=5)
+    no_qa_ir = transcript_winner_key(
+        has_qa_section=False, source=IR_TRANSCRIPT_DOC, segment_count=200
+    )
+    unknown_qa_ir = transcript_winner_key(
+        has_qa_section=None, source=IR_TRANSCRIPT_DOC, segment_count=200
+    )
+    qa_ir = transcript_winner_key(has_qa_section=True, source=IR_TRANSCRIPT_DOC, segment_count=5)
+    assert qa_roic > no_qa_ir
+    assert qa_roic > unknown_qa_ir
+    assert no_qa_ir == unknown_qa_ir
+    assert qa_ir > qa_roic
+
+
+def test_choose_winner_qa_beats_higher_source_tier_without_qa() -> None:
+    """Owner policy: confirmed Q&A beats prepared-remarks-only / unknown IR & PDF rows."""
+    for lower_source in ("aggregator_google_finance_beta", "aggregator_roic", UNKNOWN_LEGACY):
+        for higher_source in (IR_TRANSCRIPT_DOC, MANUAL_PDF):
+            for old_qa in (False, None):
+                assert choose_winner(
+                    new_source=lower_source,
+                    new_segment_count=3,
+                    new_has_qa=True,
+                    old_source=higher_source,
+                    old_segment_count=100,
+                    old_has_qa=old_qa,
+                )
+
+
+def test_choose_winner_higher_tier_without_qa_never_replaces_lower_tier_with_qa() -> None:
+    for higher_source in (IR_TRANSCRIPT_DOC, MANUAL_PDF):
+        for new_qa in (False, None):
+            assert not choose_winner(
+                new_source=higher_source,
+                new_segment_count=100,
+                new_has_qa=new_qa,
+                old_source="aggregator_roic",
+                old_segment_count=3,
+                old_has_qa=True,
+            )
+
+
+def test_choose_winner_equal_qa_availability_falls_back_to_source_tier_and_segments() -> None:
+    # Both have confirmed Q&A -> higher source tier wins even with fewer segments.
+    assert choose_winner(
+        new_source=IR_TRANSCRIPT_DOC,
+        new_segment_count=8,
+        new_has_qa=True,
+        old_source="aggregator_google_finance_beta",
+        old_segment_count=60,
+        old_has_qa=True,
+    )
+    assert not choose_winner(
+        new_source="aggregator_google_finance_beta",
+        new_segment_count=60,
+        new_has_qa=True,
+        old_source=IR_TRANSCRIPT_DOC,
+        old_segment_count=8,
+        old_has_qa=True,
+    )
+    # Both have confirmed Q&A and same tier -> richer segment count wins.
+    assert choose_winner(
+        new_source="aggregator_roic",
+        new_segment_count=25,
+        new_has_qa=True,
+        old_source="aggregator_stockanalysis",
+        old_segment_count=12,
+        old_has_qa=True,
+    )
+    # Absent (False) and unknown (None) tie at Q&A rank 0 -> source tier decides.
+    assert choose_winner(
+        new_source=IR_TRANSCRIPT_DOC,
+        new_segment_count=5,
+        new_has_qa=False,
+        old_source="aggregator_roic",
+        old_segment_count=50,
+        old_has_qa=None,
+    )
+    assert choose_winner(
+        new_source=IR_TRANSCRIPT_DOC,
+        new_segment_count=5,
+        new_has_qa=None,
+        old_source="aggregator_roic",
+        old_segment_count=50,
+        old_has_qa=False,
     )

@@ -22,10 +22,11 @@ carry its own old/new comparison (segment-count only, >=2 floor) and would
 leave a stray duplicate `documents`/`transcripts` row behind on every run
 that didn't clear that floor — the root cause of the 2026-07-25 NSP/DHR
 transcript-duplication incident (six runs in one debugging session, each
-minting a new row). The central guard also weighs source reliability, not
-just segment count, so a low-tier aggregator re-fetch can no longer replace
-a higher-tier manual/IR transcript just because it happens to parse into
-more raw segments.
+minting a new row). The central guard weighs confirmed Q&A availability first, then source
+reliability tier, then segment count, so a Q&A-bearing fetch beats a
+prepared-remarks-only transcript while a low-tier aggregator re-fetch cannot
+replace an equally Q&A-complete higher-tier manual/IR transcript just because
+it happens to parse into more raw segments.
 
 Idempotent: safe to re-run. A ticker/quarter already superseded in a prior
 run is simply re-verified (fetch + ingest again; sha256-keyed at the byte
