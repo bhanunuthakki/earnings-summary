@@ -370,7 +370,9 @@ _QA_ANALYST_TAG_RE = re.compile("<Q[\\s\\u2013\\u2014\\-]")
 # presentations there will be a question-and-answer session" preamble, so the
 # threshold is >=2 distinct introductions of analyst questions.
 _OPERATOR_ANALYST_INTRO_RE = re.compile(
-    r"(?:next|first)\s+question\s+(?:is\s+from|comes\s+from|will\s+come\s+from)",
+    r"(?:(?:next|first|last|final)\s+question"
+    r"(?:\s+(?:is\s+from|comes\s+from|will\s+come\s+from)|,\s*from\s+the\s+line\s+of)"
+    r"|\bopen\s+the\s+line\s+for\b)",
     re.IGNORECASE,
 )
 _MIN_OPERATOR_INTROS_FOR_QA = 2

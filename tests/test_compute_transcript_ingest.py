@@ -332,6 +332,46 @@ def test_detect_qa_section_operator_introductions() -> None:
     assert any(s.startswith("operator_intros=") for s in result.signals)
 
 
+def test_detect_qa_section_roic_comma_operator_cues() -> None:
+    """ROIC transcripts with 'Your first/next question, from the line of ...' classify PRESENT."""
+    text = _padded(
+        "Operator: Your first question, from the line of Saket Kalia with Barclays. "
+        "Your line is open, please go ahead.\n"
+        "Saket Kalia: Thanks for taking my question.\n\n"
+        "Operator: Your next question, from the line of Fatima Boolani with Citi. "
+        "Your line is open, please go ahead.\n"
+        "Fatima Boolani: Thanks for taking my question.\n"
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.PRESENT
+    assert "operator_intros=2" in result.signals
+
+
+def test_detect_qa_section_ir_open_the_line_cues() -> None:
+    """ROIC transcripts moderated via 'open the line for <Analyst>' classify PRESENT when >=2."""
+    text = _padded(
+        "Guilherme Souto: Thank you, operator. Could you please open the line for "
+        "Mr. Jorge Kuri from Morgan Stanley?\n"
+        "Jorge Kuri: Thanks for the opportunity to ask questions.\n\n"
+        "Guilherme Souto: Operator, could you please open the line for "
+        "Mr. Yuri Fernandes from JPMorgan?\n"
+        "Yuri Fernandes: Congrats on the results.\n"
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.PRESENT
+    assert "operator_intros=2" in result.signals
+
+
+def test_detect_qa_section_single_open_the_line_below_threshold() -> None:
+    """A single 'open the line for' phrase stays below the >=2 threshold."""
+    text = _padded(
+        "Guilherme Souto: Operator, could you please open the line for our first guest?\n"
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.ABSENT
+    assert result.signals == ()
+
+
 def test_detect_qa_section_single_operator_intro_below_threshold() -> None:
     """A single operator hand-off line is the boilerplate preamble, not Q&A
     content. Must NOT trigger PRESENT on its own."""
