@@ -24,7 +24,7 @@ from report.models import (
     ThesisSection,
 )
 from report.renderers.numfmt import fmt_date, fmt_reltime
-from report.renderers.workspace_charts import SparklineSize, sparkline
+from report.renderers.workspace_charts import SparklineSize, segmented_sparkline, sparkline
 from report.renderers.workspace_data import (
     KpiStripTile,
     NewsTile,
@@ -453,10 +453,9 @@ def _kpi_tile(body: StringIO, t: KpiStripTile, ticker: str) -> None:
         body.write(f'<div class="{cls_delta}">{_esc(t.delta_display)}</div>')
     body.write("</div>")
     if t.segment_values or t.break_labels:
-        spark_html = sparkline(
-            t.values,
+        spark_html = segmented_sparkline(
+            [list(seg) for seg in t.segment_values] if t.segment_values else [t.values],
             size=SparklineSize.KPI,
-            segments=[list(seg) for seg in t.segment_values] if t.segment_values else None,
             break_labels=list(t.break_labels) if t.break_labels else None,
         )
     else:

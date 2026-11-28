@@ -91,7 +91,7 @@ from report.models import (
     SectionStatus,
 )
 from report.renderers.charts_v2 import segmented_kpi_chart
-from report.renderers.workspace_charts import SparklineSize, sparkline
+from report.renderers.workspace_charts import SparklineSize, segmented_sparkline
 from report.renderers.workspace_data import kpi_comparable_trend_delta, select_kpi_strip
 from report.renderers.workspace_sections.chrome import _kpi_tile
 from report.renderers.workspace_sections.financials import (
@@ -799,15 +799,18 @@ def test_split_scale_and_recast_bridges_render_segmented_charts_and_honest_yoy(
         assert 'data-break-kind="scale_ratio"' in svg
         assert 'stroke-dasharray="6 4"' in svg
 
-        # Sparkline also disconnects the two segments with a break marker.
-        sp = sparkline(
-            [50.0, 52.0, 55.0, 57.2],
+        # Segmented sparkline disconnects the two segments with a break marker
+        # while keeping presentation strictly master-owned (no inline styles).
+        sp = segmented_sparkline(
+            [[50.0, 52.0], [55.0, 57.2]],
             size=SparklineSize.KPI,
-            segments=[[50.0, 52.0], [55.0, 57.2]],
             break_labels=[chart.breaks[0].label],
         )
         assert sp.count('class="ws-spark-line"') == 2
         assert 'data-kpi-break="true"' in sp
+        assert " fill=" not in sp
+        assert " stroke=" not in sp
+        assert "style=" not in sp
 
         # Aligned KPI projection bridges Q1'26 YoY to +10.0% (55 vs 50), not -45.0%!
         labels_full = ["2025 Q1", "2025 Q2", "2025 Q3", "2025 Q4", "2026 Q1", "2026 Q2"]

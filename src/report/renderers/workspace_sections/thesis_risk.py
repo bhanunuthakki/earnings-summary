@@ -25,7 +25,7 @@ from report.models import (
     ValuationSnapshot,
 )
 from report.renderers.numfmt import fmt_date, fmt_reltime
-from report.renderers.workspace_charts import SparklineSize, sparkline
+from report.renderers.workspace_charts import SparklineSize, segmented_sparkline, sparkline
 from report.renderers.workspace_data import (
     format_ledger_value,
     kpi_comparable_trend_delta,
@@ -480,10 +480,9 @@ def _kpi_ledger_row(
     if len(values) >= 2 or (len(values) == 1 and has_breaks):
         if has_breaks and r.segments:
             seg_values = [[v for _, v in seg.points] for seg in r.segments if seg.points]
-            spark = sparkline(
-                values,
+            spark = segmented_sparkline(
+                seg_values,
                 size=SparklineSize.MICRO,
-                segments=seg_values,
                 break_labels=[b.label for b in r.breaks],
             )
         else:

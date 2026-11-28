@@ -79,96 +79,13 @@ def sparkline(
     *,
     size: SparklineSize = SparklineSize.KPI,
     dot: bool = True,
-    segments: list[list[float]] | None = None,
-    break_labels: list[str] | None = None,
 ) -> str:
-    """Tiny inline-SVG sparkline. Empty / single-point series degrade safely.
-
-    When ``segments`` is provided, each contiguous segment renders as its own
-    disconnected ``<path class="ws-spark-line">`` with a vertical dashed break
-    marker between discontinuous runs — never drawing a continuous line across
-    an unbridged comparability break.
-    """
+    """Tiny inline-SVG sparkline. Empty / single-point series degrade safely."""
     width, height = _SPARKLINE_GEOMETRY[size]
     svg_open = (
         f'<svg class="ws-spark ws-spark-{size.value}" viewBox="0 0 {width} {height}" '
         'aria-hidden="true">'
     )
-    if segments is not None:
-        non_empty = [seg for seg in segments if seg]
-        if not non_empty:
-            return f"{svg_open}</svg>"
-        flat = [v for seg in non_empty for v in seg]
-        if len(flat) == 1 and not break_labels:
-            cy = height / 2
-            return (
-                svg_open
-                + f'<circle class="ws-spark-dot" cx="{width / 2:.1f}" cy="{cy:.1f}" r="2" />'
-                f"</svg>"
-            )
-        min_y = min(flat)
-        max_y = max(flat)
-        span = max_y - min_y or 1.0
-        n_total = len(flat)
-        parts = [svg_open]
-        idx_cursor = 0
-        seg_end_xs: list[float] = []
-        seg_start_xs: list[float] = []
-        last_pt: tuple[float, float] | None = None
-        for seg_idx, seg_vals in enumerate(non_empty):
-            pts: list[tuple[float, float]] = []
-            for v in seg_vals:
-                x = (idx_cursor / (n_total - 1)) * (width - 2) + 1 if n_total > 1 else width / 2
-                y = height - 2 - ((v - min_y) / span) * (height - 4)
-                pts.append((x, y))
-                idx_cursor += 1
-            seg_start_xs.append(pts[0][0])
-            seg_end_xs.append(pts[-1][0])
-            last_pt = pts[-1]
-            if len(pts) >= 2:
-                d = " ".join(
-                    ("M" if i == 0 else "L") + f"{x:.1f},{y:.1f}" for i, (x, y) in enumerate(pts)
-                )
-                area = f"{d} L{pts[-1][0]:.1f},{height} L{pts[0][0]:.1f},{height} Z"
-                parts.append(
-                    f'<path class="ws-spark-area" data-segment-index="{seg_idx}" d="{area}" />'
-                )
-                parts.append(
-                    f'<path class="ws-spark-line" data-segment-index="{seg_idx}" d="{d}" />'
-                )
-            else:
-                px, py = pts[0]
-                parts.append(
-                    f'<circle class="ws-spark-dot" data-segment-index="{seg_idx}" '
-                    f'cx="{px:.1f}" cy="{py:.1f}" r="2" />'
-                )
-        labels = list(break_labels or ())
-        if len(non_empty) > 1:
-            for boundary_idx in range(len(non_empty) - 1):
-                bx = (seg_end_xs[boundary_idx] + seg_start_xs[boundary_idx + 1]) / 2
-                b_label = (
-                    labels[boundary_idx] if boundary_idx < len(labels) else "Comparability break"
-                )
-                parts.append(
-                    f'<line class="cv2-grid-zero" data-kpi-break="true" '
-                    f'x1="{bx:.1f}" y1="1" x2="{bx:.1f}" y2="{height - 1}">'
-                    f"<title>{_esc(b_label)}</title></line>"
-                )
-        elif labels:
-            # Single post-break segment (e.g., NOT_COMPARABLE predecessor excluded):
-            # place the break marker at the left boundary so the break stays visible.
-            bx = max(1.0, seg_start_xs[0] - 2.0)
-            parts.append(
-                f'<line class="cv2-grid-zero" data-kpi-break="true" '
-                f'x1="{bx:.1f}" y1="1" x2="{bx:.1f}" y2="{height - 1}">'
-                f"<title>{_esc('; '.join(labels))}</title></line>"
-            )
-        if dot and last_pt is not None and len(non_empty[-1]) >= 2:
-            lx, ly = last_pt
-            parts.append(f'<circle class="ws-spark-dot" cx="{lx:.1f}" cy="{ly:.1f}" r="2" />')
-        parts.append("</svg>")
-        return "".join(parts)
-
     if not values:
         return f"{svg_open}</svg>"
     if len(values) == 1:
@@ -198,6 +115,96 @@ def sparkline(
     return "".join(parts)
 
 
+def segmented_sparkline(
+    segments: list[list[float]],
+    *,
+    size: SparklineSize = SparklineSize.KPI,
+    dot: bool = True,
+    break_labels: list[str] | None = None,
+) -> str:
+    """Segmented inline-SVG sparkline for series with comparability breaks.
+
+    Each contiguous segment renders as its own disconnected
+    ``<path class="ws-spark-line">`` with a vertical dashed break marker
+    between discontinuous runs — never drawing a continuous line across an
+    unbridged comparability break. Presentation comes exclusively from the
+    workspace visual master classes.
+    """
+    width, height = _SPARKLINE_GEOMETRY[size]
+    svg_open = (
+        f'<svg class="ws-spark ws-spark-{size.value}" viewBox="0 0 {width} {height}" '
+        'aria-hidden="true">'
+    )
+    non_empty = [seg for seg in segments if seg]
+    if not non_empty:
+        return f"{svg_open}</svg>"
+    flat = [v for seg in non_empty for v in seg]
+    if len(flat) == 1 and not break_labels:
+        cy = height / 2
+        return (
+            svg_open + f'<circle class="ws-spark-dot" cx="{width / 2:.1f}" cy="{cy:.1f}" r="2" />'
+            f"</svg>"
+        )
+    min_y = min(flat)
+    max_y = max(flat)
+    span = max_y - min_y or 1.0
+    n_total = len(flat)
+    parts: list[str] = [svg_open]
+    idx_cursor = 0
+    seg_end_xs: list[float] = []
+    seg_start_xs: list[float] = []
+    last_pt: tuple[float, float] | None = None
+    for seg_idx, seg_vals in enumerate(non_empty):
+        pts: list[tuple[float, float]] = []
+        for v in seg_vals:
+            x = (idx_cursor / (n_total - 1)) * (width - 2) + 1 if n_total > 1 else width / 2
+            y = height - 2 - ((v - min_y) / span) * (height - 4)
+            pts.append((x, y))
+            idx_cursor += 1
+        seg_start_xs.append(pts[0][0])
+        seg_end_xs.append(pts[-1][0])
+        last_pt = pts[-1]
+        if len(pts) >= 2:
+            d = " ".join(
+                ("M" if i == 0 else "L") + f"{x:.1f},{y:.1f}" for i, (x, y) in enumerate(pts)
+            )
+            area = f"{d} L{pts[-1][0]:.1f},{height} L{pts[0][0]:.1f},{height} Z"
+            parts.append(
+                f'<path class="ws-spark-area" data-segment-index="{seg_idx}" d="{area}" />'
+            )
+            parts.append(f'<path class="ws-spark-line" data-segment-index="{seg_idx}" d="{d}" />')
+        else:
+            px, py = pts[0]
+            parts.append(
+                f'<circle class="ws-spark-dot" data-segment-index="{seg_idx}" '
+                f'cx="{px:.1f}" cy="{py:.1f}" r="2" />'
+            )
+    labels = list(break_labels or ())
+    if len(non_empty) > 1:
+        for boundary_idx in range(len(non_empty) - 1):
+            bx = (seg_end_xs[boundary_idx] + seg_start_xs[boundary_idx + 1]) / 2
+            b_label = labels[boundary_idx] if boundary_idx < len(labels) else "Comparability break"
+            parts.append(
+                f'<line class="cv2-grid-zero" data-kpi-break="true" '
+                f'x1="{bx:.1f}" y1="1" x2="{bx:.1f}" y2="{height - 1}">'
+                f"<title>{_esc(b_label)}</title></line>"
+            )
+    elif labels:
+        # Single post-break segment (e.g., NOT_COMPARABLE predecessor excluded):
+        # place the break marker at the left boundary so the break stays visible.
+        bx = max(1.0, seg_start_xs[0] - 2.0)
+        parts.append(
+            f'<line class="cv2-grid-zero" data-kpi-break="true" '
+            f'x1="{bx:.1f}" y1="1" x2="{bx:.1f}" y2="{height - 1}">'
+            f"<title>{_esc('; '.join(labels))}</title></line>"
+        )
+    if dot and last_pt is not None and len(non_empty[-1]) >= 2:
+        lx, ly = last_pt
+        parts.append(f'<circle class="ws-spark-dot" cx="{lx:.1f}" cy="{ly:.1f}" r="2" />')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 def verdict_bar(ratings: list[str]) -> str:
     """Inline history bar — one cell per quarter, color-coded by rating."""
     tones = {"EXCEEDED": "exceeded", "MET": "met", "MIXED": "mixed", "MISSED": "missed"}
@@ -210,6 +217,7 @@ def verdict_bar(ratings: list[str]) -> str:
 
 __all__ = [
     "SparklineSize",
+    "segmented_sparkline",
     "sparkline",
     "verdict_bar",
 ]
