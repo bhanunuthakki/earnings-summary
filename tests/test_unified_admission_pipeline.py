@@ -270,6 +270,237 @@ def test_admit_retained_transcripts_end_to_end_and_fail_closed(
     assert audit.failures == 0
 
 
+def test_admit_retained_legacy_raw_path_falls_back_to_processed_and_fails_closed(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_darwin_staging_doubles(monkeypatch)
+    repo_root = tmp_path / "scratch"
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+
+    q1_bytes = b"AMZN Q1 2026 retained call transcript"
+    q1_processed = repo_root / "transcripts" / "processed" / "AMZN_Q1_2026.txt"
+    q1_processed.parent.mkdir(parents=True, exist_ok=True)
+    q1_processed.write_bytes(q1_bytes)
+
+    q2_bytes = b"AMZN Q2 2026 retained call transcript"
+    q2_processed = repo_root / "transcripts" / "processed" / "AMZN_Q2_2026.txt"
+    q2_processed.write_bytes(q2_bytes)
+    q2_raw = repo_root / "transcripts" / "raw" / "AMZN_Q2_2026.txt"
+    q2_raw.parent.mkdir(parents=True, exist_ok=True)
+    q2_raw.write_bytes(b"newer mismatched bytes in raw")
+
+    q3_processed = repo_root / "transcripts" / "processed" / "AMZN_Q3_2026.txt"
+    q3_processed.write_bytes(b"corrupted processed bytes")
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, fiscal_year_end, instrument_type) "
+            "VALUES ('AMZN', 'Amazon.com, Inc.', 'portfolio', '12-31', 'equity')"
+        )
+        conn.executemany(
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_end, file_path, "
+            "sha256, fetched_at, fetch_status, raw_bytes_size, source_url) "
+            "VALUES (?, 'AMZN', 'transcript_audio', 'earnings_call_transcript', ?, ?, ?, "
+            "'2026-01-01T00:00:00', 'ok', ?, NULL)",
+            [
+                (
+                    1,
+                    "2026-03-31",
+                    "transcripts/raw/AMZN_Q1_2026.txt",
+                    hashlib.sha256(q1_bytes).hexdigest(),
+                    len(q1_bytes),
+                ),
+                (
+                    2,
+                    "2026-06-30",
+                    "transcripts/raw/AMZN_Q2_2026.txt",
+                    hashlib.sha256(q2_bytes).hexdigest(),
+                    len(q2_bytes),
+                ),
+                (
+                    3,
+                    "2026-09-30",
+                    "transcripts/raw/AMZN_Q3_2026.txt",
+                    hashlib.sha256(b"expected q3 bytes").hexdigest(),
+                    len(b"expected q3 bytes"),
+                ),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO transcripts (id, document_id, ticker, call_date, fiscal_period_type, "
+            "period_end, source, is_active, is_current, recorded_at) "
+            "VALUES (?, ?, 'AMZN', ?, ?, ?, 'aggregator_roic', 1, 1, '2026-01-01T00:00:00')",
+            [
+                (1, 1, "2026-05-01", "Q1", "2026-03-31"),
+                (2, 2, "2026-07-30", "Q2", "2026-06-30"),
+                (3, 3, "2026-10-30", "Q3", "2026-09-30"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO transcript_segments (transcript_id, seq, speaker, text) VALUES (?, 0, 'CEO', 'seg')",
+            [(1,), (2,), (3,)],
+        )
+        conn.commit()
+
+        report = admit_retained_transcripts(
+            conn,
+            project_root=repo_root,
+            private_root=staging_root,
+            as_of=date(2026, 11, 26),
+            apply=True,
+        )
+        assert report.admitted == 2
+        assert report.skipped_counts == {"artifact_missing_or_unsafe": 1}
+        assert current_transcript_scan_binding(conn, 1) is not None
+        assert current_transcript_scan_binding(conn, 2) is not None
+        assert current_transcript_scan_binding(conn, 3) is None
+
+
+def test_authorized_ir_doc_supersedes_unreceipted_legacy_and_stops_churn(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from compute import transcript_ingest
+    from models.documents import DocType, SourceType
+    from pipeline.transcript_acquisition import (
+        COMBINED_SOURCE_REGIME_IDENTITY,
+        TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        ExistingArtifactBehavior,
+        TranscriptAcquisitionEntrypoint,
+        TranscriptAcquisitionRequest,
+        TranscriptProvider,
+        authorize_transcript_request,
+        persist_authorized_transcript_artifact,
+        stage_authorized_payload,
+    )
+
+    _install_darwin_staging_doubles(monkeypatch)
+    repo_root = tmp_path / "scratch"
+    staging_root = repo_root / ".tmp" / "transcript-acquisition"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+
+    legacy_bytes = b"legacy unreceipted aggregator transcript"
+    payload_two = (
+        b"=== SYNTHESIZED QUARTERLY UPDATE: AMZN Q2 2026 ===\n"
+        b"Source: aggregator_roic\n\n"
+        b"John Doe: First segment for Q2 2026.\n\n"
+        b"Jane Smith: Second segment for Q2 2026.\n"
+    )
+    payload_three = (
+        b"=== SYNTHESIZED QUARTERLY UPDATE: AMZN Q2 2026 ===\n"
+        b"Source: aggregator_roic\n\n"
+        b"John Doe: Updated wording for Q2 2026.\n\n"
+        b"Jane Smith: Another wording for Q2 2026.\n"
+    )
+    turns_two = transcript_ingest.segment_by_speaker(payload_two.decode("utf-8"))
+    turns_three = transcript_ingest.segment_by_speaker(payload_three.decode("utf-8"))
+    assert len(turns_two) == len(turns_three)
+
+    raw_rel = Path("transcripts/raw/AMZN_Q2_2026.txt")
+    (repo_root / raw_rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo_root / raw_rel).write_bytes(legacy_bytes)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, fiscal_year_end, instrument_type) "
+            "VALUES ('AMZN', 'Amazon.com, Inc.', 'portfolio', '12-31', 'equity')"
+        )
+        conn.execute(
+            "INSERT INTO documents (id, ticker, source_type, doc_type, period_end, file_path, "
+            "sha256, fetched_at, fetch_status, raw_bytes_size, source_url) "
+            "VALUES (1, 'AMZN', 'transcript_audio', 'earnings_call_transcript', '2026-06-30 00:00:00', ?, ?, "
+            "'2026-01-01T00:00:00', 'ok', ?, NULL)",
+            (raw_rel.as_posix(), hashlib.sha256(legacy_bytes).hexdigest(), len(legacy_bytes)),
+        )
+        conn.execute(
+            "INSERT INTO transcripts (id, document_id, ticker, call_date, fiscal_period_type, "
+            "period_end, source, is_active, is_current, recorded_at) "
+            "VALUES (1, 1, 'AMZN', '2026-07-30', 'Q2', '2026-06-30 00:00:00', 'aggregator_roic', "
+            "1, 1, '2026-01-01T00:00:00')"
+        )
+        conn.executemany(
+            "INSERT INTO transcript_segments (transcript_id, seq, speaker, text) VALUES (1, ?, 'Speaker', 'seg')",
+            [(idx,) for idx in range(len(turns_two))],
+        )
+        conn.commit()
+
+        def _authorize_and_persist(payload: bytes, suffix: str) -> transcript_ingest.IngestResult:
+            req = TranscriptAcquisitionRequest(
+                schema_version="transcript-acquisition-request@2",
+                entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+                canonical_ticker="AMZN",
+                fiscal_year=2026,
+                fiscal_quarter=2,
+                as_of=date(2026, 11, 26),
+                source_type=SourceType.IR_DOC,
+                document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+                provider=TranscriptProvider.ROIC,
+                owner_requested=True,
+                existing_artifact=False,
+                existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+                source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+                source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+            )
+            auth = authorize_transcript_request(conn, req)
+            staged = stage_authorized_payload(
+                auth,
+                payload=payload,
+                private_root=staging_root,
+                source_url=f"https://www.roic.ai/quote/AMZN/transcripts/2026-year/2-quarter{suffix}",
+                canonical_document_path=raw_rel,
+            )
+            persist_authorized_transcript_artifact(
+                conn,
+                staged,
+                project_root=repo_root,
+                trusted_staging_root=staging_root,
+            )
+            evidence_path = (
+                repo_root / "transcripts" / "raw" / ".evidence" / staged.sha256 / raw_rel.name
+            )
+            evidence_path.parent.mkdir(parents=True, exist_ok=True)
+            evidence_path.write_bytes(payload)
+            ingest_result = transcript_ingest.ingest_evidence_file(
+                conn,
+                file_path=evidence_path,
+                allowed_root=evidence_path.parent,
+                project_root=repo_root,
+                tracked_tickers=frozenset({"AMZN"}),
+                authorized_artifact=staged,
+                commit=True,
+            )
+            assert ingest_result is not None
+            return ingest_result
+
+        # Authorized receipted ir_doc supersedes unreceipted legacy row even on equal segments.
+        promoted = _authorize_and_persist(payload_two, "")
+        assert not promoted.skipped_existing
+        assert promoted.transcript_id is not None
+        assert promoted.transcript_id != 1
+        assert current_transcript_scan_binding(conn, promoted.transcript_id) is not None
+        row_after_promote = conn.execute(
+            "SELECT is_current, superseded_by_transcript_id FROM transcripts WHERE id = 1"
+        ).fetchone()
+        assert tuple(row_after_promote) == (0, promoted.transcript_id)
+
+        # Re-ingesting another equal-segment authorized ir_doc does NOT supersede/churn.
+        reingest = _authorize_and_persist(payload_three, "?retry=1")
+        assert reingest.skipped_existing
+        assert reingest.transcript_id == promoted.transcript_id
+        assert (
+            conn.execute(
+                "SELECT id FROM transcripts WHERE ticker = 'AMZN' AND is_current = 1"
+            ).fetchone()[0]
+            == promoted.transcript_id
+        )
+
+
 def test_structured_deterministic_locator_admits_without_prose_excerpt() -> None:
     xbrl_ctx = build_atomic_semantic_context(
         metric_name="Operating lease right-of-use asset",

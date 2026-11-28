@@ -614,6 +614,7 @@ def _resolve_period_conflict(
     new_source: str,
     new_segment_count: int,
     new_has_qa: bool | None = None,
+    new_is_receipted_ir_doc: bool = False,
 ) -> PeriodConflictDecision:
     """Choose the current version without mutating or discarding evidence."""
     conflict = find_transcript_for_period(
@@ -622,6 +623,19 @@ def _resolve_period_conflict(
     if conflict is None:
         return PeriodConflictDecision(None, None, True)
     old_document_id, old_transcript_id, old_source, old_segment_count, old_has_qa = conflict
+    old_is_receipted_ir_doc = True
+    if new_is_receipted_ir_doc:
+        from pipeline.commitment_scan_receipts import current_transcript_scan_binding
+
+        old_doc_row = conn.execute(
+            "SELECT source_type FROM documents WHERE id = ?",
+            (old_document_id,),
+        ).fetchone()
+        old_source_type = None if old_doc_row is None else str(old_doc_row[0])
+        old_is_receipted_ir_doc = (
+            old_source_type == SourceType.IR_DOC.value
+            and current_transcript_scan_binding(conn, old_transcript_id) is not None
+        )
     replace = choose_winner(
         new_source=new_source,
         new_segment_count=new_segment_count,
@@ -629,6 +643,8 @@ def _resolve_period_conflict(
         old_segment_count=old_segment_count,
         new_has_qa=new_has_qa,
         old_has_qa=old_has_qa,
+        new_is_receipted_ir_doc=new_is_receipted_ir_doc,
+        old_is_receipted_ir_doc=old_is_receipted_ir_doc,
     )
     sys.stderr.write(
         json.dumps(
@@ -920,6 +936,9 @@ def _ingest_one(
             new_source=source,
             new_segment_count=len(turns),
             new_has_qa=qa_status_to_db_value(qa.status),
+            new_is_receipted_ir_doc=(
+                authorized_artifact is not None and document_source_type is SourceType.IR_DOC
+            ),
         )
         transcript_id = _insert_transcript(
             conn,
@@ -975,6 +994,9 @@ def _ingest_one(
         new_source=source,
         new_segment_count=len(turns),
         new_has_qa=qa_status_to_db_value(qa.status),
+        new_is_receipted_ir_doc=(
+            authorized_artifact is not None and document_source_type is SourceType.IR_DOC
+        ),
     )
     if not decision.new_becomes_current:
         # Preserve the lower-ranked fetch as a historical evidence version.
