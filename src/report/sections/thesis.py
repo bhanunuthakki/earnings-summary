@@ -46,6 +46,10 @@ from report.models import (
     ThesisSection,
 )
 from report.sections._common import has_table, missing, open_repo_db
+from report.sections._kpi_comparability import (
+    LedgerKpiComparability,
+    resolve_ledger_kpi_comparability,
+)
 from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_signals_for_metrics,
@@ -281,6 +285,7 @@ def _build_ledger(
                         )
                     )
                     resolved_name = None if verified is None else verified.definition_name
+                    ledger_comp: LedgerKpiComparability | None = None
                     if resolved_name is None:
                         history, latest_excerpt, def_id, notes, db_unit = (
                             [],
@@ -301,8 +306,20 @@ def _build_ledger(
                             name,
                             resolved_name,
                         )
+                        if def_id is not None:
+                            is_annual = (
+                                reporting_cadence_for(db_conn, ticker, resolved_name) == "annual"
+                            )
+                            ledger_comp = resolve_ledger_kpi_comparability(
+                                db_conn,
+                                kpi_definition_id=def_id,
+                                is_annual=is_annual,
+                            )
+                            if ledger_comp is not None and ledger_comp.history:
+                                history = ledger_comp.history
                 else:
                     history, latest_excerpt, def_id, notes, db_unit = [], None, None, None, None
+                    ledger_comp = None
                 raw_nature = kd.get("metric_nature")
                 valid_natures = {item.value for item in KpiMetricNature}
                 metric_nature = (
@@ -359,6 +376,24 @@ def _build_ledger(
                         current_status=current_status,
                         latest_source_excerpt=latest_excerpt,
                         definition=definition,
+                        comparability_status=(None if ledger_comp is None else ledger_comp.status),
+                        segments=[] if ledger_comp is None else ledger_comp.segments,
+                        breaks=[] if ledger_comp is None else ledger_comp.breaks,
+                        comparable_yoy_delta=(
+                            None if ledger_comp is None else ledger_comp.comparable_yoy_delta
+                        ),
+                        comparable_yoy_pct=(
+                            None if ledger_comp is None else ledger_comp.comparable_yoy_pct
+                        ),
+                        comparable_yoy_status=(
+                            None if ledger_comp is None else ledger_comp.comparable_yoy_status
+                        ),
+                        comparable_yoy_bridge_kind=(
+                            None if ledger_comp is None else ledger_comp.comparable_yoy_bridge_kind
+                        ),
+                        comparable_yoy_reason=(
+                            None if ledger_comp is None else ledger_comp.comparable_yoy_reason
+                        ),
                     )
                 )
             tier_rows.sort(key=lambda r: r.name.lower())

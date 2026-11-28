@@ -373,6 +373,33 @@ class CompanyDescriptionSection(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class KpiSeriesSegment(BaseModel):
+    """One contiguous, single-cadence run of comparable KPI observations."""
+
+    segment_index: int
+    reported_label: str
+    cadence_kind: str = "standalone_quarter"
+    definition_revision_ids: list[str] = []
+    is_transformed: bool = False
+    bridge_kind: str | None = None
+    points: list[tuple[str, float]] = []
+
+
+class KpiSeriesBreak(BaseModel):
+    """Typed comparability boundary marker between KPI chart/table segments."""
+
+    period_end: str
+    period_label: str | None = None
+    relation_kind: str
+    disposition: str
+    bridge_kind: str | None = None
+    label: str
+    predecessor_revision_id: str
+    successor_revision_id: str
+    comparability_revision_id: str
+    source_locator: dict[str, object] = {}
+
+
 class KpiLedgerRow(BaseModel):
     name: str
     tier: Literal["tier_1", "tier_2", "tier_3"]
@@ -403,6 +430,16 @@ class KpiLedgerRow(BaseModel):
     # column (added in migration 0033). Surfaced in the brief as a tooltip
     # on the latest value so the reader can trace it back to source.
     latest_source_excerpt: str | None = None
+    # Revision-aware comparability metadata from resolve_kpi_chart_series /
+    # resolve_kpi_comparable_yoy. Empty / None on legacy unbound series.
+    comparability_status: str | None = None
+    segments: list[KpiSeriesSegment] = []
+    breaks: list[KpiSeriesBreak] = []
+    comparable_yoy_delta: float | None = None
+    comparable_yoy_pct: float | None = None
+    comparable_yoy_status: str | None = None
+    comparable_yoy_bridge_kind: str | None = None
+    comparable_yoy_reason: str | None = None
 
 
 class BreakRuleObservation(BaseModel):
@@ -624,6 +661,16 @@ class KpiSeries(BaseModel):
     # Scalar mirror of sources_full[i].confidence for renderers that only
     # need the per-cell % (heatmap hover/affordance) without the full chip.
     confidence_full: list[float | None] = []
+    # Revision-aware comparability segments, breaks, and strict YoY overrides
+    # populated from resolve_kpi_chart_series / resolve_kpi_comparable_yoy.
+    kpi_definition_id: int | None = None
+    comparability_status: str | None = None
+    segments: list[KpiSeriesSegment] = []
+    breaks: list[KpiSeriesBreak] = []
+    yoy_pct_full: list[float | None] | None = None
+    yoy_status_full: list[str | None] = []
+    yoy_reasons_full: list[str | None] = []
+    comparison_eligible_edges: list[bool] | None = None
 
 
 class AnnualKpiSeries(BaseModel):
@@ -648,6 +695,14 @@ class AnnualKpiSeries(BaseModel):
     # (KPI chip universality, S2 PR2 — see KpiSeries.sources_full).
     sources_full: list[CellSource | None] = []
     confidence_full: list[float | None] = []
+    kpi_definition_id: int | None = None
+    comparability_status: str | None = None
+    segments: list[KpiSeriesSegment] = []
+    breaks: list[KpiSeriesBreak] = []
+    yoy_pct_full: list[float | None] | None = None
+    yoy_status_full: list[str | None] = []
+    yoy_reasons_full: list[str | None] = []
+    comparison_eligible_edges: list[bool] | None = None
 
 
 class FinancialsSection(BaseModel):

@@ -1487,6 +1487,7 @@ def bind_forward_kpi_definition_revision(
     source_locator_json: str | None = None,
     comparative_overlap: ComparativeOverlapCandidate | None = None,
     overlap_policy: OverlapTolerancePolicy | None = None,
+    definition_effective_at: datetime | None = None,
 ) -> ForwardKpiRevisionBinding | None:
     """Resolve or append an admitted KPI definition revision for forward persistence.
 
@@ -1662,13 +1663,18 @@ def bind_forward_kpi_definition_revision(
     period_kind, stock_flow_behavior = _forward_period_and_behavior(unit, current=current)
     revision_number = 1 if current is None else current.revision + 1
     supersedes_id = None if current is None else current.kpi_definition_revision_id
+    rev_effective_at = (
+        min(effective_at, _utc_from_datetime(definition_effective_at))
+        if definition_effective_at is not None
+        else effective_at
+    )
     signature = {
         "accounting_basis": context.accounting_basis.value,
         "consolidation_scope": context.consolidation_scope.value,
         "currency": None if currency is None else currency.value,
         "currency_disposition": currency_disposition.value,
         "dimensions": context.dimensions,
-        "effective_at": _utc_text(effective_at),
+        "effective_at": _utc_text(rev_effective_at),
         "kpi_definition_id": kpi_definition_id,
         "period_kind": period_kind.value,
         "reported_label": context.metric_name_as_reported,
@@ -1706,7 +1712,7 @@ def bind_forward_kpi_definition_revision(
         source_evidence_node_id=evidence_node_id,
         source_locator=locator_dict,
         reviewed_by=reviewer,
-        effective_at=effective_at,
+        effective_at=rev_effective_at,
         knowledge_at=candidate_ts,
         recorded_at=candidate_ts,
     )
