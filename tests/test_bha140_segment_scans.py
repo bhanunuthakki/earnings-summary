@@ -174,7 +174,7 @@ def test_duplicate_excerpt_retains_each_exact_originating_segment(
     assert actual_ids == expected_ids
 
 
-def test_cross_segment_excerpts_cannot_swap_exact_anchors(
+def test_cross_segment_excerpts_reanchor_to_exact_adjacent_segment(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     path = migrated_db(tmp_path / "swapped-excerpts.db")
@@ -188,6 +188,12 @@ def test_cross_segment_excerpts_cannot_swap_exact_anchors(
         first_seg_id = int(
             conn.execute(
                 "SELECT id FROM transcript_segments WHERE transcript_id=? AND seq=0",
+                (transcript_id,),
+            ).fetchone()[0]
+        )
+        second_seg_id = int(
+            conn.execute(
+                "SELECT id FROM transcript_segments WHERE transcript_id=? AND seq=1",
                 (transcript_id,),
             ).fetchone()[0]
         )
@@ -212,9 +218,10 @@ def test_cross_segment_excerpts_cannot_swap_exact_anchors(
                 }
             )
 
-        with pytest.raises(CommitmentParseError, match="anchored transcript segment"):
-            extract_for_transcript(conn, transcript_id, llm_call=llm)
-    assert calls == 2
+        result = extract_for_transcript(conn, transcript_id, llm_call=llm)
+    assert calls == 1
+    assert len(result.indicators) == 1
+    assert result.indicators[0].transcript_segment_id == second_seg_id
 
 
 @pytest.mark.parametrize("response", ["{}", '{"commitments":[]}', '{"novel_indicators":[]}'])

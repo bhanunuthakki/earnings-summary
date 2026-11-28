@@ -63,6 +63,7 @@ _MAX_REPORTED_QUARTERS = 5
 _CANONICAL_TRANSCRIPT_STEM_RE = re.compile(
     r"^(?P<ticker>[A-Z0-9.-]+)_Q(?P<quarter>[1-4])_(?P<year>[0-9]{4})(?:__(?P<digest>[0-9a-f]{8}))?$"
 )
+_CANONICAL_TRANSCRIPT_SUFFIXES = frozenset({".txt", ".pdf", ".html"})
 
 
 def is_canonical_issuer_transcript_path(
@@ -83,9 +84,9 @@ def is_canonical_issuer_transcript_path(
 def parse_canonical_transcript_filename(
     relative: Path | PurePosixPath | str,
 ) -> tuple[str, int, int] | None:
-    """Parse ``<TICKER>_Q<quarter>_<year>.txt`` -> ``(ticker, fiscal_year, fiscal_quarter)``."""
+    """Parse ``<TICKER>_Q<quarter>_<year>[__<8hex>].(txt|pdf|html)`` -> ``(ticker, year, quarter)``."""
     path = PurePosixPath(str(relative).replace("\\", "/"))
-    if path.suffix.lower() != ".txt":
+    if path.suffix.lower() not in _CANONICAL_TRANSCRIPT_SUFFIXES:
         return None
     match = _CANONICAL_TRANSCRIPT_STEM_RE.fullmatch(path.stem)
     if match is None:

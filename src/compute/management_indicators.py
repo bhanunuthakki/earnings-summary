@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -87,8 +89,45 @@ def _table_available(conn: sqlite3.Connection) -> bool:
     )
 
 
+_ZERO_WIDTH_RX = re.compile(r"[\u00ad\u200b\u200c\u200d\ufeff]")
+_LINE_BREAK_HYPHEN_RX = re.compile(r"([A-Za-z])-\s*[\r\n]+\s*([A-Za-z])")
+_WHITESPACE_RX = re.compile(r"\s+")
+_MIN_SPACE_COLLAPSED_LEN = 12
+
+
 def _normalized_source_text(value: str) -> str:
-    return " ".join(value.split())
+    """Normalize PDF/transcript text while preserving exact numeric/punctuation tokens."""
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = _ZERO_WIDTH_RX.sub("", normalized)
+    normalized = _LINE_BREAK_HYPHEN_RX.sub(r"\1\2", normalized)
+    return " ".join(normalized.split())
+
+
+def _space_collapsed_text(value: str) -> str:
+    """Collapse all whitespace after NFKC/de-hyphenation to tolerate PDF kerning splits."""
+    return _WHITESPACE_RX.sub("", _normalized_source_text(value)).casefold()
+
+
+def _excerpt_matches_segment_text(source_excerpt: str, segment_text: str) -> bool:
+    """Return True when ``source_excerpt`` is grounded in ``segment_text``.
+
+    Checks exact normalized substring first, then case-insensitive normalized
+    substring, and finally whitespace-collapsed matching (for excerpts of at
+    least 12 non-whitespace characters) so PDF kerning splits like
+    ``"reinvestm ents"`` vs ``"reinvestments"`` match without false positives.
+    """
+    norm_excerpt = _normalized_source_text(source_excerpt)
+    if not norm_excerpt:
+        return False
+    norm_segment = _normalized_source_text(segment_text)
+    if norm_excerpt in norm_segment:
+        return True
+    if norm_excerpt.casefold() in norm_segment.casefold():
+        return True
+    compact_excerpt = _space_collapsed_text(source_excerpt)
+    if len(compact_excerpt) >= _MIN_SPACE_COLLAPSED_LEN:
+        return compact_excerpt in _space_collapsed_text(segment_text)
+    return False
 
 
 def _resolve_indicator_source(
@@ -99,7 +138,7 @@ def _resolve_indicator_source(
     source_excerpt: str,
     allow_legacy_segment_rebind: bool = False,
 ) -> _ResolvedIndicatorSource:
-    """Bind an extracted excerpt to exactly one segment of the named issuer's transcript."""
+    """Bind an extracted excerpt to one segment of the named issuer's transcript."""
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcript_segments)")}
     speaker = "ts.speaker" if "speaker" in columns else "NULL"
     time_code = "ts.time_code_start" if "time_code_start" in columns else "NULL"
@@ -126,15 +165,13 @@ def _resolve_indicator_source(
             f"indicator ticker={expected_ticker} does not match transcript/document ticker "
             f"{transcript_ticker}/{document_ticker}"
         )
-    excerpt = _normalized_source_text(source_excerpt)
     resolved = anchor
-    if excerpt not in _normalized_source_text(str(anchor[8])):
-        if not allow_legacy_segment_rebind:
-            raise ValueError(
-                "management indicator source excerpt must occur in its anchored transcript segment"
-            )
+    if not _excerpt_matches_segment_text(source_excerpt, str(anchor[8])):
+        anchor_seq = int(anchor[5])
+        # Check ±1 adjacent segments within the same transcript first (handles
+        # speaker/chunk boundary attribution offsets cleanly).
         # nosec B608 -- table/column fragments are fixed schema identifiers selected above.
-        candidates = conn.execute(  # nosec B608
+        adjacent_rows = conn.execute(  # nosec B608
             "SELECT tr.document_id,tr.id,tr.ticker,d.ticker,ts.id,ts.seq,"  # nosec B608
             + speaker
             + ","
@@ -142,19 +179,45 @@ def _resolve_indicator_source(
             + ",ts.text "  # nosec B608
             "FROM transcript_segments ts JOIN " + transcripts.sql + " tr ON tr.id=ts.transcript_id "
             "JOIN documents d ON d.id=tr.document_id "
-            "WHERE tr.id=? ORDER BY ts.seq,ts.id",
-            (int(anchor[1]),),
+            "WHERE tr.id=? AND ts.seq IN (?, ?) AND ts.id != ? ORDER BY ts.seq,ts.id",
+            (int(anchor[1]), anchor_seq - 1, anchor_seq + 1, int(anchor[4])),
         ).fetchall()
-        matches = [
+        adjacent_matches = [
             candidate
-            for candidate in candidates
-            if excerpt in _normalized_source_text(str(candidate[8]))
+            for candidate in adjacent_rows
+            if _excerpt_matches_segment_text(source_excerpt, str(candidate[8]))
         ]
-        if len(matches) != 1:
+        if len(adjacent_matches) == 1:
+            resolved = adjacent_matches[0]
+        elif not allow_legacy_segment_rebind:
             raise ValueError(
-                "management indicator source excerpt must match exactly one transcript segment"
+                "management indicator source excerpt must occur in its anchored transcript segment"
             )
-        resolved = matches[0]
+        else:
+            # nosec B608 -- table/column fragments are fixed schema identifiers selected above.
+            candidates = conn.execute(  # nosec B608
+                "SELECT tr.document_id,tr.id,tr.ticker,d.ticker,ts.id,ts.seq,"  # nosec B608
+                + speaker
+                + ","
+                + time_code
+                + ",ts.text "  # nosec B608
+                "FROM transcript_segments ts JOIN "
+                + transcripts.sql
+                + " tr ON tr.id=ts.transcript_id "
+                "JOIN documents d ON d.id=tr.document_id "
+                "WHERE tr.id=? ORDER BY ts.seq,ts.id",
+                (int(anchor[1]),),
+            ).fetchall()
+            matches = [
+                candidate
+                for candidate in candidates
+                if _excerpt_matches_segment_text(source_excerpt, str(candidate[8]))
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    "management indicator source excerpt must match exactly one transcript segment"
+                )
+            resolved = matches[0]
     return _ResolvedIndicatorSource(
         source_doc_id=int(resolved[0]),
         transcript_id=int(resolved[1]),
@@ -170,6 +233,25 @@ def _optional_text(value: object) -> str | None:
     return text or None
 
 
+def resolve_indicator_source_binding(
+    conn: sqlite3.Connection,
+    *,
+    indicator: ManagementIndicatorInput,
+) -> ManagementIndicatorInput:
+    """Resolve and return an indicator anchored to its exact matching segment."""
+    resolved = _resolve_indicator_source(
+        conn,
+        anchor_segment_id=indicator.transcript_segment_id,
+        ticker=indicator.ticker,
+        source_excerpt=indicator.source_excerpt,
+    )
+    if resolved.transcript_segment_id != indicator.transcript_segment_id:
+        return indicator.model_copy(
+            update={"transcript_segment_id": resolved.transcript_segment_id}
+        )
+    return indicator
+
+
 def validate_indicator_source_binding(
     conn: sqlite3.Connection,
     *,
@@ -177,12 +259,7 @@ def validate_indicator_source_binding(
 ) -> None:
     """Require the indicator excerpt to bind to one exact issuer transcript segment."""
 
-    _resolve_indicator_source(
-        conn,
-        anchor_segment_id=indicator.transcript_segment_id,
-        ticker=indicator.ticker,
-        source_excerpt=indicator.source_excerpt,
-    )
+    resolve_indicator_source_binding(conn, indicator=indicator)
 
 
 def _canonical_payload(

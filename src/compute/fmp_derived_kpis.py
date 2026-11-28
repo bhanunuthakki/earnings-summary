@@ -62,7 +62,10 @@ from pipeline.kpi_semantics import (
     semantic_admission_sql,
     unclassified_kpi_context,
 )
-from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+from pipeline.restatement_detector import (
+    find_same_doc_kpi_fact_id,
+    insert_kpi_with_restatement_detection,
+)
 from provenance.financial_fact_resolution import (
     canonical_fact_relation,
     canonical_fact_selections_as_known,
@@ -1545,6 +1548,29 @@ def persist_derived_kpis(
                 reviewed_by=f"deterministic:{extracted_by}",
                 kpi_definition_revision_id=None,
             )
+        else:
+            existing_id = find_same_doc_kpi_fact_id(
+                conn,
+                ticker=ticker,
+                period_end=row.period_end,
+                fiscal_period_type=row.fiscal_period_type.value,
+                kpi_definition_id=kpi_def_id,
+                source_doc_id=row.source_doc_id,
+            )
+            if existing_id is not None:
+                existing_ctx = current_kpi_semantic_context(conn, kpi_fact_id=existing_id)
+                desired_ctx = _derived_semantic_context(row, tier_by_doc=tier_by_doc)
+                if existing_ctx is None or (
+                    existing_ctx.context.status is KpiSemanticStatus.LEGACY_UNKNOWN
+                    and desired_ctx.status is KpiSemanticStatus.ADMITTED
+                ):
+                    persist_kpi_semantic_context(
+                        conn,
+                        kpi_fact_id=existing_id,
+                        context=desired_ctx,
+                        reviewed_by=f"deterministic:{extracted_by}",
+                        kpi_definition_revision_id=None,
+                    )
         # L10: capture the restatement instead of discarding superseded_id.
         if superseded_id is not None:
             _ = record_restatement_observation(
@@ -1581,11 +1607,6 @@ def _derived_semantic_context(
                     if isinstance(item, dict)
                     and isinstance(raw_doc_id := cast("dict[str, object]", item).get("doc_id"), int)
                 }
-    # financial_facts is a normalized table populated by several adapters. Its
-    # arithmetic is deterministically GAAP/consolidated only when every selected
-    # source cell is bound to an SEC-official document. FMP-normalized or unknown
-    # lineage stays explicit legacy_unknown and therefore fails closed for
-    # decision-grade consumers.
     if (
         refs in ({"financial_fact"}, {"legacy_canonical_fact"})
         and doc_ids

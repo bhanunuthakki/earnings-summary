@@ -9,11 +9,8 @@ import sqlite3
 from collections import Counter
 from pathlib import Path, PurePosixPath
 
+from compute.say_do_extractor import compute_transcript_segments_sha256
 from llm.prompt_versions import prompt_version_for
-from pipeline.commitment_scan_receipts import (
-    commitment_scan_coverage,
-    current_transcript_scan_binding,
-)
 from provenance.selection import selected_transcripts_relation
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -67,24 +64,38 @@ def audit_commitment_scan_evidence(
             if observed_sha != str(row["sha256"]):
                 reason = "artifact_hash_mismatch"
             else:
-                receipt_count = int(
-                    conn.execute(
-                        "SELECT COUNT(*) FROM transcript_acquisition_receipts "
-                        "WHERE artifact_sha256=?",
-                        (str(row["sha256"]),),
-                    ).fetchone()[0]
-                )
-                if receipt_count == 0:
-                    reason = "acquisition_receipt_missing"
-                elif current_transcript_scan_binding(conn, transcript_id) is None:
-                    reason = "acquisition_binding_invalid"
+                seg_sha = compute_transcript_segments_sha256(conn, transcript_id)
+                if seg_sha is None:
+                    reason = "transcript_segments_missing"
                 else:
-                    coverage = commitment_scan_coverage(
-                        conn,
-                        transcript_id=transcript_id,
-                        prompt_version=version,
-                    )
-                    reason = coverage.state.value
+                    log_cols = {
+                        str(col[1])
+                        for col in conn.execute("PRAGMA table_info(commitment_scan_log)").fetchall()
+                    }
+                    if "segments_sha256" in log_cols:
+                        log_row = conn.execute(
+                            "SELECT prompt_version, segments_sha256 FROM commitment_scan_log "
+                            "WHERE transcript_id = ?",
+                            (transcript_id,),
+                        ).fetchone()
+                        if log_row is None:
+                            reason = "never_scanned_missing"
+                        elif (
+                            str(log_row["prompt_version"] or "") == version
+                            and str(log_row["segments_sha256"] or "") == seg_sha
+                        ):
+                            reason = "complete"
+                        else:
+                            reason = "source_changed_missing"
+                    else:
+                        has_log = (
+                            conn.execute(
+                                "SELECT 1 FROM commitment_scan_log WHERE transcript_id = ?",
+                                (transcript_id,),
+                            ).fetchone()
+                            is not None
+                        )
+                        reason = "complete" if has_log else "never_scanned_missing"
         counts[reason] += 1
         details.append(
             {

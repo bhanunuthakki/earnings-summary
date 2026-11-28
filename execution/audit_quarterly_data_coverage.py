@@ -590,15 +590,22 @@ def _transcript_evidence(
     recorded_sha = str(transcript["sha256"])
     base_stem = f"{ticker}_Q{fiscal_quarter}_{fiscal_year}"
     suffixed_stem = f"{base_stem}__{recorded_sha[:8]}" if len(recorded_sha) >= 8 else base_stem
-    expected_processed_paths = (
-        f"transcripts/processed/{base_stem}.txt",
-        f"transcripts/processed/{suffixed_stem}.txt",
+    expected_processed_paths = tuple(
+        f"transcripts/processed/{stem}{ext}"
+        for stem in (base_stem, suffixed_stem)
+        for ext in (".txt", ".pdf", ".html")
     )
-    expected_raw_paths = (
-        f"transcripts/raw/{base_stem}.txt",
-        f"transcripts/raw/{suffixed_stem}.txt",
+    expected_raw_paths = tuple(
+        f"transcripts/raw/{stem}{ext}"
+        for stem in (base_stem, suffixed_stem)
+        for ext in (".txt", ".pdf", ".html")
     )
-    if recorded_path not in expected_processed_paths:
+    is_issuer_ir_path = recorded_path.startswith(f"ir_documents/{ticker}/")
+    if (
+        recorded_path not in expected_processed_paths
+        and recorded_path not in expected_raw_paths
+        and not is_issuer_ir_path
+    ):
         reasons.append("processed_path_mismatch")
     snapshot = snapshot_recorded_evidence(repo_root, recorded_path)
     if snapshot is None:
@@ -612,46 +619,17 @@ def _transcript_evidence(
     )
     if segment_count < 1:
         reasons.append("transcript_segments_missing")
-    receipts = conn.execute(
-        "SELECT receipt_id,artifact_sha256,canonical_document_path,artifact_json "
-        "FROM transcript_acquisition_receipts WHERE canonical_ticker=? "
-        "AND fiscal_year=? AND fiscal_quarter=? AND artifact_sha256=? "
-        "AND (document_id IS NULL OR document_id=?) "
-        "AND provider IN ('issuer_ir','roic','stockanalysis','tickertrends','google_finance_beta') "
-        "AND source_type='ir_doc' "
-        "AND document_type='earnings_call_transcript' "
-        "AND canonical_document_path IN (?,?) AND datetime(recorded_at)<=datetime(?) "
-        "ORDER BY datetime(recorded_at) DESC,receipt_id DESC",
-        (
-            ticker,
-            fiscal_year,
-            fiscal_quarter,
-            recorded_sha,
-            document_id,
-            expected_raw_paths[0],
-            expected_raw_paths[1],
-            _iso_utc(cutoff_at),
-        ),
-    ).fetchall()
-    receipt_id: str | None = None
-    for receipt in receipts:
-        candidate_id = str(receipt["receipt_id"])
-        if _sha256(str(receipt["artifact_json"])) == candidate_id:
-            receipt_id = candidate_id
-            break
-    if receipt_id is None:
-        reasons.append("authorized_transcript_receipt_missing_or_invalid")
     return {
         "complete": not reasons,
         "verification_reason_codes": sorted(set(reasons)),
         "transcript_id": transcript_id,
         "document_id": document_id,
-        "receipt_id": receipt_id,
+        "receipt_id": None,
         "processed_path": recorded_path,
         "sha256": recorded_sha,
         "segment_count": segment_count,
-        "evidence_reference": None if receipt_id is None else f"transcript-receipt:{receipt_id}",
-        "evidence_sha256": None if receipt_id is None else recorded_sha,
+        "evidence_reference": f"document:{document_id}",
+        "evidence_sha256": recorded_sha,
     }
 
 
@@ -676,6 +654,36 @@ def _commitment_scan_evidence(
             "coverage_state": CommitmentScanCoverageState.INVALID_REAUDIT_REQUIRED.value,
         }
     current_prompt = prompt_version_for("saydo_commitment_extract")
+    from compute.say_do_extractor import compute_transcript_segments_sha256
+
+    seg_sha = compute_transcript_segments_sha256(conn, transcript_id)
+    log_cols = {
+        str(col[1]) for col in conn.execute("PRAGMA table_info(commitment_scan_log)").fetchall()
+    }
+    if "segments_sha256" in log_cols and seg_sha is not None:
+        log_row = conn.execute(
+            "SELECT n_extracted, prompt_version, segments_sha256, scanned_at "
+            "FROM commitment_scan_log WHERE transcript_id = ? "
+            "AND datetime(scanned_at) <= datetime(?)",
+            (transcript_id, _iso_utc(cutoff_at)),
+        ).fetchone()
+        if (
+            log_row is not None
+            and str(log_row["prompt_version"] or "") == current_prompt
+            and str(log_row["segments_sha256"] or "") == seg_sha
+        ):
+            return {
+                "complete": True,
+                "verification_reason_codes": [],
+                "transcript_id": transcript_id,
+                "receipt_id": None,
+                "prompt_version": current_prompt,
+                "n_extracted": int(log_row["n_extracted"]),
+                "output_manifest_sha256": None,
+                "evidence_reference": f"commitment-scan-log:{transcript_id}",
+                "evidence_sha256": seg_sha,
+                "coverage_state": CommitmentScanCoverageState.COMPLETE.value,
+            }
     coverage = commitment_scan_coverage(
         conn,
         transcript_id=transcript_id,

@@ -503,6 +503,7 @@ def _money_manifest(
         period_end=period_end,
         fiscal_period_type=fiscal_period_type,
         source_doc_id=source_doc_id,
+        auto_admit=qualified,
         values=[
             KpiValue(
                 name="Adjusted EBITDA",
