@@ -76,7 +76,6 @@ from provenance.source_inventory_seal import InventoryComponent, component_diges
 from runtime.deterministic import canonical_json
 from search.canonical_fact_projection import verify_canonical_projection_generation
 from search.embedding_promotion import EmbeddingPromotion
-from search.heterogeneous_retrieval import verify_heterogeneous_retrieval_trace
 
 
 class Severity(StrEnum):
@@ -331,47 +330,6 @@ _SOURCE_INVENTORY_SEAL_TABLES = (
     "source_inventory_snapshot_seals",
     "search_manifest_source_inventories",
 )
-_ASK_TRACE_TABLES = (
-    "ask_retrieval_traces",
-    "ask_retrieval_trace_items",
-    "ask_answer_groundings",
-)
-
-
-class GroundedAskItem(BaseModel):
-    """Historical Ask trace item shape used to verify persisted bundle digests."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    rank: int = Field(gt=0)
-    manifest_id: str
-    chunk_id: str
-    score: float
-    text: str
-    node_id: str
-    node_kind: str
-    locator: dict[str, object] | None
-    document_version_id: str
-    issuer_id: str
-    ticker: str | None
-    form_type: str
-    source_url: str
-    filing_at: datetime | None
-    observed_at: datetime
-    retrieved_at: datetime
-
-
-def ask_item_bundle_sha256(item: GroundedAskItem) -> str:
-    """Recompute the legacy Ask bundle digest without retaining its dead retriever."""
-
-    payload = json.dumps(
-        item.model_dump(mode="json"),
-        default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value),
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 _EMBEDDING_PROMOTION_TABLES = ("search_embedding_model_promotions",)
@@ -460,13 +418,6 @@ _FACT_PLANE_V2_TABLES = (
     "fact_derivation_input_edges_v2",
     "fact_derivation_seals_v2",
 )
-_FACT_SEARCH_V2_TABLES = (
-    "search_fact_projection_runs",
-    "search_fact_projection_memberships",
-    "search_fact_projection_rows",
-    "search_fact_projection_seals",
-    "ask_retrieval_trace_hits",
-)
 _FACT_PLANE_V2_HARDENING_TABLES = (
     "fact_dimensions_normalized_v2",
     "fact_cell_identity_seals_v2",
@@ -479,10 +430,6 @@ _FACT_PLANE_V2_VIEWS = (
     "v_fact_resolutions_current_v2",
     "v_fact_cells_resolved_current_v2",
     "v_fact_observations_as_reported_v2",
-)
-_FACT_SEARCH_V2_VIEWS = (
-    "v_search_fact_projection_current_sealed",
-    "v_search_fact_hits_current",
 )
 _FACT_PLANE_V2_HARDENING_VIEWS = (
     "v_fact_cells_hardened_v2",
@@ -503,13 +450,6 @@ _FACT_PLANE_V2_INDEXES = (
     "ix_fact_derivation_edges_v2_output",
     "ix_fact_derivation_edges_v2_input",
 )
-_FACT_SEARCH_V2_INDEXES = (
-    "ix_search_fact_projection_runs_manifest",
-    "ix_search_fact_projection_memberships_disposition",
-    "ix_search_fact_projection_rows_entity_concept",
-    "ix_search_fact_projection_rows_security_period",
-    "ix_ask_retrieval_trace_hits_source",
-)
 _FACT_PLANE_V2_GUARD_TRIGGERS = (
     "trg_fact_cells_v2_security_scope",
     "trg_fact_cells_v2_security_relationship",
@@ -528,26 +468,6 @@ _FACT_PLANE_V2_GUARD_TRIGGERS = (
     "trg_fact_derivation_edges_v2_sealed",
     "trg_fact_derivation_seals_v2_validate",
 )
-_FACT_SEARCH_V2_GUARD_TRIGGERS = (
-    "trg_search_fact_projection_runs_manifest",
-    "trg_search_fact_projection_runs_first",
-    "trg_search_fact_projection_runs_parent",
-    "trg_search_fact_projection_memberships_unsealed",
-    "trg_search_fact_projection_memberships_scope",
-    "trg_search_fact_projection_memberships_included",
-    "trg_search_fact_projection_memberships_unresolved",
-    "trg_search_fact_projection_memberships_resolution_scope",
-    "trg_search_fact_projection_rows_unsealed",
-    "trg_search_fact_projection_rows_membership",
-    "trg_search_fact_projection_rows_exact",
-    "trg_search_fact_projection_seals_contract",
-    "trg_search_fact_projection_seals_counts",
-    "trg_search_fact_projection_seals_coverage",
-    "trg_ask_retrieval_trace_hits_rank_legacy",
-    "trg_ask_retrieval_trace_items_rank_v2",
-    "trg_ask_retrieval_trace_hits_document",
-    "trg_ask_retrieval_trace_hits_fact",
-)
 _FACT_PLANE_V2_HARDENING_GUARD_TRIGGERS = (
     "trg_fact_observations_v2_evidence_chain_hardened",
     "trg_fact_dimensions_normalized_v2_typed_digest",
@@ -559,8 +479,6 @@ _FACT_PLANE_V2_HARDENING_GUARD_TRIGGERS = (
     "trg_fact_extraction_seals_v2_complete",
     "trg_evidence_nodes_fact_extraction_sealed_v2",
     "trg_fact_reported_anchors_extraction_sealed_v2",
-    "trg_search_fact_membership_hardened_v2",
-    "trg_search_fact_rows_hardened_v2",
 )
 _CUTOVER_GATE_TABLES: dict[str, tuple[str, ...]] = {
     "source_fact_publications": (
@@ -618,12 +536,6 @@ _CUTOVER_GATE_TABLES: dict[str, tuple[str, ...]] = {
         "research_snapshot_headers",
         "research_snapshot_members",
         "research_snapshot_seals",
-    ),
-    "heterogeneous_retrieval_traces": (
-        "heterogeneous_retrieval_trace_headers",
-        "heterogeneous_retrieval_trace_candidates",
-        "heterogeneous_retrieval_trace_results",
-        "heterogeneous_retrieval_trace_seals",
     ),
     "embedding_runtime_promotions": ("search_embedding_model_promotions",),
     "embedding_runtime_artifacts": (
@@ -686,7 +598,6 @@ def audit_connection(conn: sqlite3.Connection, options: AuditOptions) -> Integri
     _audit_expectation_lifecycle(conn, tables, findings, options)
     _audit_search_corpus(conn, tables, findings, options)
     _audit_embedding_promotion(conn, tables, findings, options)
-    _audit_ask_traces(conn, tables, findings, options)
     if options.verify_bytes:
         _audit_blob_bytes(conn, tables, findings, options)
     findings.sort(key=lambda item: (item.severity.value, item.code))
@@ -1728,27 +1639,6 @@ def audit_cutover_readiness(
             ),
             params=params,
             verifier=lambda row: verify_research_snapshot(conn, str(row["research_snapshot_id"])),
-        )
-        _run_cutover_gate(
-            conn,
-            tables,
-            findings,
-            coverage,
-            options,
-            candidate_commitments=candidate_commitments,
-            spec=CutoverGateQuerySpec(
-                gate="heterogeneous_retrieval_traces",
-                selection_policy_id="retrieval-traces.K-cutoff.O-recorded.v1",
-                key_column="trace_id",
-                query=(
-                    "SELECT trace_id FROM heterogeneous_retrieval_trace_headers "
-                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
-                    "AND julianday(recorded_at)<=julianday(:observed_through) "
-                    "ORDER BY trace_id"
-                ),
-            ),
-            params=params,
-            verifier=lambda row: verify_heterogeneous_retrieval_trace(conn, str(row["trace_id"])),
         )
         _run_cutover_gate(
             conn,
@@ -4286,133 +4176,6 @@ def _audit_expectation_lifecycle(
     )
 
 
-def _audit_ask_traces(
-    conn: sqlite3.Connection,
-    tables: set[str],
-    findings: list[IntegrityFinding],
-    options: AuditOptions,
-) -> None:
-    present = set(_ASK_TRACE_TABLES) & tables
-    if not present:
-        return
-    missing = set(_ASK_TRACE_TABLES) - tables
-    if missing:
-        _add(
-            findings,
-            code="ASK_TRACE_SCHEMA_PARTIAL",
-            severity=Severity.BLOCKER,
-            remediation=RemediationClass.HARD_STOP,
-            count=len(missing),
-            query_context="sqlite_master Ask trace tables",
-            samples=tuple(sorted(missing)[: options.sample_limit]),
-        )
-        return
-    _audit_append_only_triggers(conn, findings, options, _ASK_TRACE_TABLES, "ASK_TRACE")
-    _query_finding(
-        conn,
-        findings,
-        options,
-        code="ASK_READY_TRACE_WITHOUT_MANIFEST",
-        severity=Severity.BLOCKER,
-        remediation=RemediationClass.REINGEST,
-        query=(
-            "SELECT trace_id FROM ask_retrieval_traces "
-            "WHERE outcome = 'ready' AND manifest_ids_json = '[]' ORDER BY trace_id"
-        ),
-    )
-    _query_finding(
-        conn,
-        findings,
-        options,
-        code="ASK_TRACE_ITEM_MANIFEST_MISMATCH",
-        severity=Severity.BLOCKER,
-        remediation=RemediationClass.REINGEST,
-        query=(
-            "SELECT item.trace_id || ':' || item.rank "
-            "FROM ask_retrieval_trace_items AS item "
-            "JOIN search_chunks AS chunk ON chunk.chunk_id = item.chunk_id "
-            "WHERE chunk.manifest_id <> item.manifest_id ORDER BY item.trace_id, item.rank"
-        ),
-    )
-    _query_finding(
-        conn,
-        findings,
-        options,
-        code="ASK_TRACE_ITEM_OUTSIDE_MANIFEST_SET",
-        severity=Severity.BLOCKER,
-        remediation=RemediationClass.REINGEST,
-        query=(
-            "SELECT item.trace_id || ':' || item.rank "
-            "FROM ask_retrieval_trace_items AS item "
-            "JOIN ask_retrieval_traces AS trace ON trace.trace_id = item.trace_id "
-            "WHERE NOT EXISTS ("
-            "SELECT 1 FROM json_each("
-            "CASE WHEN json_valid(trace.manifest_ids_json) "
-            "THEN trace.manifest_ids_json ELSE '[]' END"
-            ") AS manifest WHERE manifest.value = item.manifest_id"
-            ") ORDER BY item.trace_id, item.rank"
-        ),
-    )
-    bundle_mismatches: list[str] = []
-    bundle_mismatch_count = 0
-    rows = conn.execute(
-        "SELECT item.trace_id,item.rank,item.manifest_id,item.chunk_id,item.score,"
-        "item.bundle_sha256,chunk.text,node.node_id,node.node_kind,node.locator_json,"
-        "doc.document_version_id,doc.issuer_id,doc.ticker,doc.form_type,"
-        "source.source_url,source.filing_at,source.observed_at,source.retrieved_at "
-        "FROM ask_retrieval_trace_items AS item "
-        "JOIN search_chunks AS chunk ON chunk.chunk_id = item.chunk_id "
-        "JOIN evidence_nodes AS node ON node.node_id = chunk.evidence_node_id "
-        "JOIN evidence_extraction_runs AS run "
-        "ON run.extraction_run_id = node.extraction_run_id "
-        "JOIN evidence_document_versions AS doc "
-        "ON doc.document_version_id = run.document_version_id "
-        "JOIN evidence_source_observations AS source "
-        "ON source.observation_id = doc.observation_id "
-        "ORDER BY item.trace_id,item.rank"
-    )
-    for row in rows:
-        identity = f"{row[0]}:{row[1]}"
-        try:
-            item = GroundedAskItem.model_validate(
-                {
-                    "rank": row[1],
-                    "manifest_id": row[2],
-                    "chunk_id": row[3],
-                    "score": row[4],
-                    "text": row[6],
-                    "node_id": row[7],
-                    "node_kind": row[8],
-                    "locator": None if row[9] is None else json.loads(str(row[9])),
-                    "document_version_id": row[10],
-                    "issuer_id": row[11],
-                    "ticker": row[12],
-                    "form_type": row[13],
-                    "source_url": row[14],
-                    "filing_at": row[15],
-                    "observed_at": row[16],
-                    "retrieved_at": row[17],
-                }
-            )
-            matches = ask_item_bundle_sha256(item) == str(row[5])
-        except (ValueError, json.JSONDecodeError):
-            matches = False
-        if not matches:
-            bundle_mismatch_count += 1
-            if len(bundle_mismatches) < options.sample_limit:
-                bundle_mismatches.append(identity)
-    if bundle_mismatch_count:
-        _add(
-            findings,
-            code="ASK_TRACE_ITEM_BUNDLE_DIGEST_MISMATCH",
-            severity=Severity.BLOCKER,
-            remediation=RemediationClass.REINGEST,
-            count=bundle_mismatch_count,
-            query_context="recomputed Ask retrieval evidence bundle digest",
-            samples=tuple(bundle_mismatches),
-        )
-
-
 def _audit_embedding_promotion(
     conn: sqlite3.Connection,
     tables: set[str],
@@ -5342,27 +5105,6 @@ def _audit_fact_plane_v2(
     _audit_fact_v2_object_inventory(conn, findings, options)
     _audit_fact_v2_base(conn, findings, options)
 
-    projection_present = set(_FACT_SEARCH_V2_TABLES) & tables
-    if not projection_present:
-        _add(
-            findings,
-            code="FACT_SEARCH_V2_SCHEMA_ABSENT",
-            severity=Severity.BLOCKER,
-            remediation=RemediationClass.HARD_STOP,
-            count=len(_FACT_SEARCH_V2_TABLES),
-            query_context="structured fact-search table inventory",
-            samples=tuple(_FACT_SEARCH_V2_TABLES[: options.sample_limit]),
-        )
-    elif _require_schema_group(
-        findings,
-        options,
-        present=tables,
-        required=_FACT_SEARCH_V2_TABLES,
-        code="FACT_SEARCH_V2_SCHEMA_PARTIAL",
-        context="structured fact-search table inventory",
-    ):
-        _audit_fact_search_v2(conn, findings, options)
-
     hardening_present = set(_FACT_PLANE_V2_HARDENING_TABLES) & tables
     if not hardening_present:
         _add(
@@ -5386,8 +5128,6 @@ def _audit_fact_plane_v2(
         return
     _audit_fact_v2_hardening_inventory(conn, findings, options)
     _audit_fact_v2_hardening(conn, findings, options)
-    if set(_FACT_SEARCH_V2_TABLES).issubset(tables):
-        _audit_fact_search_v2_hardened_inclusion(conn, findings, options)
 
 
 def _require_schema_group(
@@ -5519,43 +5259,6 @@ def _audit_fact_v2_hardening_inventory(
         ),
         code="FACT_PLANE_V2_HARDENING_TRIGGER_MISSING",
         context="sqlite_master hardened fact-plane trigger inventory",
-    )
-
-
-def _audit_fact_search_v2_inventory(
-    conn: sqlite3.Connection,
-    findings: list[IntegrityFinding],
-    options: AuditOptions,
-) -> None:
-    _audit_named_objects(
-        conn,
-        findings,
-        options,
-        object_type="view",
-        expected=_FACT_SEARCH_V2_VIEWS,
-        code="FACT_SEARCH_V2_VIEW_MISSING",
-        context="sqlite_master structured fact-search view inventory",
-    )
-    _audit_named_objects(
-        conn,
-        findings,
-        options,
-        object_type="index",
-        expected=_FACT_SEARCH_V2_INDEXES,
-        code="FACT_SEARCH_V2_INDEX_MISSING",
-        context="sqlite_master structured fact-search index inventory",
-    )
-    _audit_named_objects(
-        conn,
-        findings,
-        options,
-        object_type="trigger",
-        expected=(
-            *_append_only_names(_FACT_SEARCH_V2_TABLES),
-            *_FACT_SEARCH_V2_GUARD_TRIGGERS,
-        ),
-        code="FACT_SEARCH_V2_TRIGGER_MISSING",
-        context="sqlite_master structured fact-search trigger inventory",
     )
 
 
@@ -6659,388 +6362,4 @@ def _audit_fact_v2_extraction_seals(
             "counts, software commitments, and clocks"
         ),
         samples=tuple(samples),
-    )
-
-
-def _audit_fact_search_v2(
-    conn: sqlite3.Connection,
-    findings: list[IntegrityFinding],
-    options: AuditOptions,
-) -> None:
-    _audit_fact_search_v2_inventory(conn, findings, options)
-    _audit_fact_search_v2_row_bundles(conn, findings, options)
-    _audit_fact_search_v2_membership_bundles(conn, findings, options)
-    _audit_fact_search_v2_seals(conn, findings, options)
-
-    for code, query in (
-        (
-            "FACT_SEARCH_V2_RUN_CORPUS_MISMATCH",
-            "SELECT run.projection_run_id "
-            "FROM search_fact_projection_runs AS run "
-            "LEFT JOIN search_corpus_manifests AS manifest "
-            "ON manifest.manifest_id = run.manifest_id "
-            "LEFT JOIN search_corpus_manifest_seals AS seal "
-            "ON seal.manifest_id = run.manifest_id "
-            "WHERE manifest.manifest_id IS NULL "
-            "OR seal.completion_status <> 'complete' "
-            "OR manifest.knowledge_cutoff IS NULL "
-            "OR manifest.knowledge_cutoff <> run.knowledge_cutoff "
-            "ORDER BY run.projection_run_id",
-        ),
-        (
-            "FACT_SEARCH_V2_MEMBERSHIP_COVERAGE_MISMATCH",
-            "SELECT run.projection_run_id,cell.fact_cell_id "
-            "FROM search_fact_projection_runs AS run "
-            "JOIN fact_cells_v2 AS cell "
-            "ON cell.knowledge_at <= run.knowledge_cutoff "
-            "AND cell.recorded_at <= run.recorded_at "
-            "LEFT JOIN search_fact_projection_memberships AS membership "
-            "ON membership.projection_run_id = run.projection_run_id "
-            "AND membership.fact_cell_id = cell.fact_cell_id "
-            "WHERE membership.membership_id IS NULL "
-            "ORDER BY run.projection_run_id,cell.fact_cell_id",
-        ),
-        (
-            "FACT_SEARCH_V2_ROW_DISPOSITION_MISMATCH",
-            "SELECT membership.membership_id "
-            "FROM search_fact_projection_memberships AS membership "
-            "LEFT JOIN search_fact_projection_rows AS row "
-            "ON row.projection_run_id = membership.projection_run_id "
-            "AND row.fact_cell_id = membership.fact_cell_id "
-            "WHERE (membership.disposition = 'included' "
-            "AND row.fact_hit_id IS NULL) "
-            "OR (membership.disposition <> 'included' "
-            "AND row.fact_hit_id IS NOT NULL) "
-            "ORDER BY membership.membership_id",
-        ),
-        (
-            "FACT_SEARCH_V2_ROW_SOURCE_MISMATCH",
-            "SELECT row.fact_hit_id "
-            "FROM search_fact_projection_rows AS row "
-            "LEFT JOIN fact_cells_v2 AS cell "
-            "ON cell.fact_cell_id = row.fact_cell_id "
-            "LEFT JOIN fact_resolution_revisions_v2 AS resolution "
-            "ON resolution.resolution_revision_id = row.resolution_revision_id "
-            "LEFT JOIN fact_observations_v2 AS observation "
-            "ON observation.observation_id = row.observation_id "
-            "WHERE cell.fact_cell_id IS NULL "
-            "OR resolution.resolution_revision_id IS NULL "
-            "OR observation.observation_id IS NULL "
-            "OR resolution.fact_cell_id <> row.fact_cell_id "
-            "OR resolution.status <> 'resolved' "
-            "OR resolution.selected_observation_id <> row.observation_id "
-            "OR observation.fact_cell_id <> row.fact_cell_id "
-            "OR row.reporting_entity_id <> cell.reporting_entity_id "
-            "OR row.scope_security_id IS NOT cell.scope_security_id "
-            "OR row.concept_namespace <> cell.concept_namespace "
-            "OR row.concept_name <> cell.concept_name "
-            "OR row.period_start IS NOT cell.period_start "
-            "OR row.period_end <> cell.period_end "
-            "OR row.canonical_dimensions_sha256 "
-            "<> cell.canonical_dimensions_sha256 "
-            "OR row.unit_key <> cell.unit_key OR row.currency IS NOT cell.currency "
-            "OR row.value_kind <> observation.value_kind "
-            "OR row.numeric_value IS NOT observation.numeric_value "
-            "OR row.text_value IS NOT observation.text_value "
-            "OR row.is_nil <> observation.is_nil "
-            "OR row.candidate_set_id <> resolution.candidate_set_id "
-            "OR row.candidate_count <> resolution.candidate_count "
-            "OR row.candidate_set_digest_sha256 "
-            "<> resolution.candidate_set_digest_sha256 "
-            "OR row.cell_knowledge_at <> cell.knowledge_at "
-            "OR row.observation_knowledge_at <> observation.knowledge_at "
-            "OR row.resolution_knowledge_at <> resolution.knowledge_at "
-            "ORDER BY row.fact_hit_id",
-        ),
-        (
-            "FACT_SEARCH_V2_NO_LOOKAHEAD",
-            "SELECT row.fact_hit_id "
-            "FROM search_fact_projection_rows AS row "
-            "JOIN search_fact_projection_runs AS run "
-            "ON run.projection_run_id = row.projection_run_id "
-            "JOIN fact_observations_v2 AS observation "
-            "ON observation.observation_id = row.observation_id "
-            "JOIN fact_resolution_revisions_v2 AS resolution "
-            "ON resolution.resolution_revision_id = row.resolution_revision_id "
-            "WHERE observation.knowledge_at > run.knowledge_cutoff "
-            "OR observation.recorded_at > run.knowledge_cutoff "
-            "OR resolution.knowledge_at > run.knowledge_cutoff "
-            "OR resolution.recorded_at > run.knowledge_cutoff "
-            "OR row.recorded_at > run.recorded_at ORDER BY row.fact_hit_id",
-        ),
-        (
-            "FACT_SEARCH_V2_UNSEALED_RUN",
-            "SELECT run.projection_run_id "
-            "FROM search_fact_projection_runs AS run "
-            "LEFT JOIN search_fact_projection_seals AS seal "
-            "ON seal.projection_run_id = run.projection_run_id "
-            "WHERE seal.projection_run_id IS NULL ORDER BY run.projection_run_id",
-        ),
-    ):
-        _query_finding(
-            conn,
-            findings,
-            options,
-            code=code,
-            severity=Severity.BLOCKER,
-            remediation=RemediationClass.HARD_STOP,
-            query=query,
-        )
-
-
-def _audit_fact_search_v2_row_bundles(
-    conn: sqlite3.Connection,
-    findings: list[IntegrityFinding],
-    options: AuditOptions,
-) -> None:
-    count = 0
-    samples: list[str] = []
-    cursor = conn.execute(
-        "SELECT fact_hit_id,row_bundle_json,row_bundle_sha256 "
-        "FROM search_fact_projection_rows ORDER BY fact_hit_id"
-    )
-    while batch := cursor.fetchmany(512):
-        for fact_hit_id, raw_json, expected in batch:
-            mismatch = False
-            try:
-                parsed = _JSON_OBJECT_ADAPTER.validate_json(str(raw_json))
-                embedded = parsed.pop("row_sha256", None)
-                canonical = _canonical_commitment_json(parsed)
-                mismatch = embedded != expected or _commitment_sha256(canonical) != str(expected)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                mismatch = True
-            if mismatch:
-                count += 1
-                if len(samples) < options.sample_limit:
-                    samples.append(str(fact_hit_id))
-    _add(
-        findings,
-        code="FACT_SEARCH_V2_ROW_BUNDLE_MISMATCH",
-        severity=Severity.BLOCKER,
-        remediation=RemediationClass.HARD_STOP,
-        count=count,
-        query_context="recomputed structured FactHit bundle excluding self hash",
-        samples=tuple(samples),
-    )
-
-
-def _audit_fact_search_v2_membership_bundles(
-    conn: sqlite3.Connection,
-    findings: list[IntegrityFinding],
-    options: AuditOptions,
-) -> None:
-    count = 0
-    samples: list[str] = []
-    cursor = conn.execute(
-        "SELECT membership_id,projection_run_id,fact_cell_id,disposition,"
-        "resolution_revision_id,reason_code,reason_details_json,"
-        "membership_bundle_sha256,recorded_at "
-        "FROM search_fact_projection_memberships ORDER BY membership_id"
-    )
-    while batch := cursor.fetchmany(512):
-        for row in batch:
-            membership_id = str(row[0])
-            try:
-                canonical = _canonical_commitment_json(
-                    {
-                        "disposition": row[3],
-                        "fact_cell_id": row[2],
-                        "membership_id": row[0],
-                        "projection_run_id": row[1],
-                        "reason_code": row[5],
-                        "reason_details": json.loads(str(row[6])),
-                        "recorded_at": _canonical_datetime(row[8]),
-                        "resolution_revision_id": row[4],
-                    }
-                )
-                mismatch = _commitment_sha256(canonical) != str(row[7])
-            except (TypeError, ValueError, json.JSONDecodeError):
-                mismatch = True
-            if mismatch:
-                count += 1
-                if len(samples) < options.sample_limit:
-                    samples.append(membership_id)
-    _add(
-        findings,
-        code="FACT_SEARCH_V2_MEMBERSHIP_BUNDLE_MISMATCH",
-        severity=Severity.BLOCKER,
-        remediation=RemediationClass.HARD_STOP,
-        count=count,
-        query_context="recomputed structured fact-search membership bundles",
-        samples=tuple(samples),
-    )
-
-
-def _audit_fact_search_v2_seals(
-    conn: sqlite3.Connection,
-    findings: list[IntegrityFinding],
-    options: AuditOptions,
-) -> None:
-    count = 0
-    samples: list[str] = []
-    cursor = conn.execute(
-        "SELECT seal.projection_seal_id,seal.projection_run_id,"
-        "seal.manifest_id,seal.eligible_fact_cell_count,"
-        "seal.membership_count,seal.included_count,"
-        "seal.unresolved_material_count,seal.missing_provenance_count,"
-        "seal.quarantined_count,seal.row_count,"
-        "seal.membership_set_sha256,seal.row_set_sha256,"
-        "seal.config_sha256,seal.sealed_at,run.manifest_id,"
-        "run.config_sha256,run.recorded_at "
-        "FROM search_fact_projection_seals AS seal "
-        "LEFT JOIN search_fact_projection_runs AS run "
-        "ON run.projection_run_id = seal.projection_run_id "
-        "ORDER BY seal.projection_seal_id"
-    )
-    while batch := cursor.fetchmany(128):
-        for row in batch:
-            seal_id = str(row[0])
-            run_id = str(row[1])
-            disposition_counts = {
-                "included": 0,
-                "unresolved_material": 0,
-                "missing_provenance": 0,
-                "quarantined": 0,
-            }
-            membership_digest_state = hashlib.sha256()
-            membership_digest_state.update(b"[")
-            membership_count = 0
-            membership_rows = conn.execute(
-                "SELECT membership_id,membership_bundle_sha256,disposition "
-                "FROM search_fact_projection_memberships "
-                "WHERE projection_run_id = ? ORDER BY membership_id",
-                (run_id,),
-            )
-            for item in membership_rows:
-                disposition = str(item[2])
-                if disposition in disposition_counts:
-                    disposition_counts[disposition] += 1
-                if membership_count:
-                    membership_digest_state.update(b",")
-                membership_digest_state.update(
-                    _canonical_commitment_json(
-                        {
-                            "membership_bundle_sha256": item[1],
-                            "membership_id": item[0],
-                        }
-                    ).encode("utf-8")
-                )
-                membership_count += 1
-            membership_digest_state.update(b"]")
-            membership_digest = membership_digest_state.hexdigest()
-            row_count, row_digest = _canonical_sequence_digest(
-                {
-                    "fact_hit_id": item[0],
-                    "row_bundle_sha256": item[1],
-                }
-                for item in conn.execute(
-                    "SELECT fact_hit_id,row_bundle_sha256 "
-                    "FROM search_fact_projection_rows "
-                    "WHERE projection_run_id = ? ORDER BY fact_hit_id",
-                    (run_id,),
-                )
-            )
-            eligible_row = conn.execute(
-                "SELECT COUNT(*) FROM fact_cells_v2 AS cell "
-                "JOIN search_fact_projection_runs AS run "
-                "ON run.projection_run_id = ? "
-                "WHERE cell.knowledge_at <= run.knowledge_cutoff "
-                "AND cell.recorded_at <= run.recorded_at",
-                (run_id,),
-            ).fetchone()
-            eligible = 0 if eligible_row is None else int(eligible_row[0])
-            mismatch = (
-                row[14] is None
-                or row[2] != row[14]
-                or row[12] != row[15]
-                or _audit_utc_datetime(row[13]) < _audit_utc_datetime(row[16])
-                or int(row[3]) != eligible
-                or int(row[4]) != membership_count
-                or int(row[5]) != disposition_counts["included"]
-                or int(row[6]) != disposition_counts["unresolved_material"]
-                or int(row[7]) != disposition_counts["missing_provenance"]
-                or int(row[8]) != disposition_counts["quarantined"]
-                or int(row[9]) != row_count
-                or row_count != disposition_counts["included"]
-                or str(row[10]) != membership_digest
-                or str(row[11]) != row_digest
-            )
-            if mismatch:
-                count += 1
-                if len(samples) < options.sample_limit:
-                    samples.append(seal_id)
-    _add(
-        findings,
-        code="FACT_SEARCH_V2_PROJECTION_SEAL_MISMATCH",
-        severity=Severity.BLOCKER,
-        remediation=RemediationClass.HARD_STOP,
-        count=count,
-        query_context=(
-            "recomputed fact-search eligible cells, dispositions, row coverage, "
-            "and ordered set commitments"
-        ),
-        samples=tuple(samples),
-    )
-
-
-def _audit_fact_search_v2_hardened_inclusion(
-    conn: sqlite3.Connection,
-    findings: list[IntegrityFinding],
-    options: AuditOptions,
-) -> None:
-    _query_finding(
-        conn,
-        findings,
-        options,
-        code="FACT_SEARCH_V2_INCLUDED_WITHOUT_COMMITMENT",
-        severity=Severity.BLOCKER,
-        remediation=RemediationClass.HARD_STOP,
-        query=(
-            "SELECT membership.membership_id "
-            "FROM search_fact_projection_memberships AS membership "
-            "JOIN fact_resolution_revisions_v2 AS resolution "
-            "ON resolution.resolution_revision_id = "
-            "membership.resolution_revision_id "
-            "LEFT JOIN fact_observation_payload_commitments_v2 AS payload "
-            "ON payload.observation_id = resolution.selected_observation_id "
-            "LEFT JOIN fact_observations_v2 AS observation "
-            "ON observation.observation_id = resolution.selected_observation_id "
-            "LEFT JOIN fact_reported_observation_anchors_v2 AS anchor "
-            "ON anchor.observation_id = resolution.selected_observation_id "
-            "LEFT JOIN fact_extraction_run_completeness_seals_v2 AS extraction "
-            "ON extraction.extraction_run_id = anchor.extraction_run_id "
-            "WHERE membership.disposition = 'included' "
-            "AND (payload.observation_id IS NULL "
-            "OR observation.observation_id IS NULL "
-            "OR (observation.observation_kind = 'reported' "
-            "AND (anchor.observation_id IS NULL "
-            "OR extraction.extraction_seal_id IS NULL))) "
-            "ORDER BY membership.membership_id"
-        ),
-    )
-    _query_finding(
-        conn,
-        findings,
-        options,
-        code="FACT_SEARCH_V2_ROW_WITHOUT_COMMITMENT",
-        severity=Severity.BLOCKER,
-        remediation=RemediationClass.HARD_STOP,
-        query=(
-            "SELECT row.fact_hit_id "
-            "FROM search_fact_projection_rows AS row "
-            "LEFT JOIN fact_observation_payload_commitments_v2 AS payload "
-            "ON payload.observation_id = row.observation_id "
-            "LEFT JOIN fact_observations_v2 AS observation "
-            "ON observation.observation_id = row.observation_id "
-            "LEFT JOIN fact_reported_observation_anchors_v2 AS anchor "
-            "ON anchor.observation_id = row.observation_id "
-            "LEFT JOIN fact_extraction_run_completeness_seals_v2 AS extraction "
-            "ON extraction.extraction_run_id = anchor.extraction_run_id "
-            "WHERE payload.observation_id IS NULL "
-            "OR observation.observation_id IS NULL "
-            "OR (observation.observation_kind = 'reported' "
-            "AND (anchor.observation_id IS NULL "
-            "OR extraction.extraction_seal_id IS NULL)) "
-            "ORDER BY row.fact_hit_id"
-        ),
     )

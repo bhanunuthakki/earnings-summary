@@ -98,9 +98,8 @@ def test_0077_repairs_four_google_finance_fye_transcripts_and_restores_trigger(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = migrated_db(tmp_path / "portfolio.db")
+    db_path = migrated_db(tmp_path / "portfolio.db", target=_PRIOR_REVISION)
     cfg = _config(db_path)
-    command.downgrade(cfg, _PRIOR_REVISION)
 
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
@@ -224,9 +223,8 @@ def test_0077_empty_db_is_noop_and_preserves_trigger(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = migrated_db(tmp_path / "empty.db")
+    db_path = migrated_db(tmp_path / "empty.db", target=_PRIOR_REVISION)
     cfg = _config(db_path)
-    command.downgrade(cfg, _PRIOR_REVISION)
     with sqlite3.connect(db_path) as conn:
         trigger_before = _trigger_sql(conn)
         assert trigger_before is not None
@@ -245,9 +243,8 @@ def test_0077_collision_guard_skips_conflicting_row_without_aborting(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = migrated_db(tmp_path / "collision.db")
+    db_path = migrated_db(tmp_path / "collision.db", target=_PRIOR_REVISION)
     cfg = _config(db_path)
-    command.downgrade(cfg, _PRIOR_REVISION)
 
     birk_ticker, birk_fp, birk_sha, birk_old, birk_new = _REPAIRS[0]
     twst_ticker, twst_fp, twst_sha, twst_old, twst_new = _REPAIRS[2]

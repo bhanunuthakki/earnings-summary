@@ -30,32 +30,16 @@ import sqlite3
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from html import unescape
 from pathlib import Path
-from typing import cast
 
 import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-import ask.sealed_retrieval as sealed_retrieval
-from search.embedding_promotion import LocalVectorRuntimeConfig
-from search.heterogeneous_retrieval import HeterogeneousRetrievalReceipt
-from search.request_verification import RequestVerificationCache
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SEALED_RETRIEVAL_SOURCE = PROJECT_ROOT / "src" / "ask" / "sealed_retrieval.py"
 
 _EVIDENCE_DIR_ENV = "SEARCH_VALIDATION_EVIDENCE_DIR"
-
-# The exact href template the sealed lane emits for BOTH narrative and fact
-# citations (src/ask/sealed_retrieval.py ``_narrative_item`` / ``_fact_item``).
-# The route must serve this shape; the coupling test below fails if the sealed
-# lane changes it without the route.
-_SEALED_HREF_TEMPLATE = (
-    "/source/version/{quote(version_id, safe='')}?node={quote(node_id, safe='')}"
-)
 
 _SCOPE_NOTE = (
     "Hermetic fixture evidence only: no live sealed Ask turn, no real Claude call, "
@@ -195,7 +179,7 @@ def _fixture_corpus_definition() -> dict[str, object]:
             "claim_ordinal": _CLAIM_ORDINAL,
             "citation_number": _CITATION_NUMBER,
         },
-        "href_template": _SEALED_HREF_TEMPLATE,
+        "href_template": "/source/version/{document_version_id}?node={node_id}",
     }
 
 
@@ -506,7 +490,6 @@ def _seed_fixture(db_path: Path) -> None:
                 "d" * 64,
             ),
         )
-        _seed_persisted_claim_mapping(conn)
         conn.commit()
     finally:
         conn.close()
@@ -514,87 +497,6 @@ def _seed_fixture(db_path: Path) -> None:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _seed_persisted_claim_mapping(conn: sqlite3.Connection) -> None:
-    """Persist the fixture's claim-to-citation mapping in the real audit tables.
-
-    The rows use the sealed lane's canonical JSON + digest helpers so the
-    persisted citation payload has the exact shape the audit store writes.
-    """
-    from ask.audit_store import canonical_json, digest_text
-
-    citation_payload = {
-        "n": _CITATION_NUMBER,
-        "kind": "fact",
-        "label": f"{_TICKER} · {_METRIC_NAME} · {_PERIOD_END}",
-        "href": _sealed_source_version_href(_DOCUMENT_VERSION_ID, _FACT_NODE_ID),
-        "source_url": _SOURCE_URL,
-        "confidence": None,
-        "ticker": _TICKER,
-        "doc_type": _FORM_TYPE,
-        "period": _PERIOD_END,
-        "value": _CITATION_VALUE,
-        "trace_id": "trace-fixture-1",
-        "result_ordinal": 0,
-        "candidate_id": _METRIC_CELL_ID,
-        "source_commitment_sha256": "d" * 64,
-        "research_snapshot_id": "snapshot-fixture-1",
-        "as_of_at": "2026-01-15T14:05:00+00:00",
-        "document_version_id": _DOCUMENT_VERSION_ID,
-        "evidence_node_id": _FACT_NODE_ID,
-        "node_kind": "fact",
-        "locator": _FACT_LOCATOR,
-    }
-    citation_json = canonical_json(citation_payload)
-    conn.execute(
-        "INSERT INTO ask_answer_audit_citations (answer_id, citation_number, trace_id,"
-        "result_ordinal, candidate_kind, candidate_id, source_commitment_sha256,"
-        "citation_json, citation_sha256, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (
-            _ANSWER_ID,
-            _CITATION_NUMBER,
-            "trace-fixture-1",
-            0,
-            "fact",
-            _METRIC_CELL_ID,
-            "d" * 64,
-            citation_json,
-            digest_text(citation_json),
-            _RECORDED_AT,
-        ),
-    )
-    claim_json = canonical_json(
-        {
-            "char_end": len(_CLAIM_TEXT),
-            "char_start": 0,
-            "claim_ordinal": _CLAIM_ORDINAL,
-            "claim_sha256": digest_text(_CLAIM_TEXT),
-            "supported": True,
-        }
-    )
-    conn.execute(
-        "INSERT INTO ask_answer_audit_claims (answer_id, claim_ordinal, char_start,"
-        "char_end, claim_text, claim_sha256, supported, claim_json, claim_json_sha256,"
-        "recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (
-            _ANSWER_ID,
-            _CLAIM_ORDINAL,
-            0,
-            len(_CLAIM_TEXT),
-            _CLAIM_TEXT,
-            digest_text(_CLAIM_TEXT),
-            1,
-            claim_json,
-            digest_text(claim_json),
-            _RECORDED_AT,
-        ),
-    )
-    conn.execute(
-        "INSERT INTO ask_answer_audit_claim_citations (answer_id, claim_ordinal,"
-        "citation_number, recorded_at) VALUES (?,?,?,?)",
-        (_ANSWER_ID, _CLAIM_ORDINAL, _CITATION_NUMBER, _RECORDED_AT),
-    )
 
 
 @pytest.fixture
@@ -647,52 +549,7 @@ def _parse_provenance(html: str) -> _RenderedProvenance:
     )
 
 
-@dataclass(slots=True)
-class _PersistedClaim:
-    claim_ordinal: int
-    citation_number: int
-    claim_text: str
-    citation: dict[str, object]
-
-
-def _load_persisted_mapping(db_path: Path) -> list[_PersistedClaim]:
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            "SELECT edge.claim_ordinal, edge.citation_number, claim.claim_text,"
-            "citation.citation_json "
-            "FROM ask_answer_audit_claim_citations edge "
-            "JOIN ask_answer_audit_claims claim ON claim.answer_id=edge.answer_id "
-            "AND claim.claim_ordinal=edge.claim_ordinal "
-            "JOIN ask_answer_audit_citations citation ON citation.answer_id=edge.answer_id "
-            "AND citation.citation_number=edge.citation_number "
-            "WHERE edge.answer_id=? ORDER BY edge.claim_ordinal, edge.citation_number",
-            (_ANSWER_ID,),
-        ).fetchall()
-    finally:
-        conn.close()
-    return [
-        _PersistedClaim(
-            claim_ordinal=int(row["claim_ordinal"]),
-            citation_number=int(row["citation_number"]),
-            claim_text=str(row["claim_text"]),
-            citation=cast("dict[str, object]", json.loads(str(row["citation_json"]))),
-        )
-        for row in rows
-    ]
-
-
 # --- tests ----------------------------------------------------------------------------
-
-
-def test_sealed_href_template_matches_the_route_contract() -> None:
-    """The fixture hrefs are the sealed lane's emitted shape, not a paraphrase."""
-    source = SEALED_RETRIEVAL_SOURCE.read_text(encoding="utf-8")
-    assert source.count(_SEALED_HREF_TEMPLATE) == 2, (
-        "sealed_retrieval.py no longer emits the /source/version/<id>?node=<node> "
-        "href template exactly twice; the route contract must be re-checked"
-    )
 
 
 def test_narrative_citation_resolves_to_the_full_provenance_chain(
@@ -784,16 +641,8 @@ def test_narrative_citation_resolves_to_the_full_provenance_chain(
 
 def test_cited_fact_claim_reconciles_to_the_immutable_observation(
     client: FlaskClient,
-    fixture_db: Path,
 ) -> None:
-    mapping = _load_persisted_mapping(fixture_db)
-    assert len(mapping) == 1
-    entry = mapping[0]
-    citation = entry.citation
-    assert citation["document_version_id"] == _DOCUMENT_VERSION_ID
-    assert citation["evidence_node_id"] == _FACT_NODE_ID
-
-    href = str(citation["href"])
+    href = _sealed_source_version_href(_DOCUMENT_VERSION_ID, _FACT_NODE_ID)
     response = client.get(href)
     assert response.status_code == 200
     parsed = _parse_provenance(response.get_data(as_text=True))
@@ -818,344 +667,9 @@ def test_cited_fact_claim_reconciles_to_the_immutable_observation(
     # The stored reported value equals the cited value after only the documented
     # display normalization (the citation preserves the currency and literal unit).
     assert fact_row["fact-value"] == _METRIC_VALUE
-    assert citation["value"] == _CITATION_VALUE
     assert (
         f"{fact_row['fact-value']} {fact_row['fact-currency']} {fact_row['fact-unit']}"
         == _CITATION_VALUE
-    )
-    assert _METRIC_VALUE in entry.claim_text
-
-    _record_artifact(
-        "source-version-val-search-003-reconciliation.json",
-        {
-            "assertion": "VAL-SEARCH-003",
-            "feature": "source-version-routes",
-            "scope_note": _SCOPE_NOTE,
-            "display_normalization": _DISPLAY_NORMALIZATION,
-            "claims": [
-                {
-                    "claim_ordinal": entry.claim_ordinal,
-                    "claim_text": entry.claim_text,
-                    "citation_number": entry.citation_number,
-                    "citation_href": href,
-                    "status": response.status_code,
-                    "rendered": {
-                        "issuer_id": root["issuer-id"],
-                        "ticker": root["ticker"],
-                        "document_version_id": root["document-version-id"],
-                        "observation_id": root["observation-id"],
-                        "period_end": root["period-end"],
-                        "metric": fact_row["fact-metric"],
-                        "value": fact_row["fact-value"],
-                        "unit": fact_row["fact-unit"],
-                        "currency": fact_row["fact-currency"],
-                        "node_id": fact_row["fact-node-id"],
-                        "locator": json.loads(fact_row["fact-locator"]),
-                    },
-                    "expected_observation": {
-                        "issuer_id": _ISSUER_ID,
-                        "ticker": _TICKER,
-                        "document_version_id": _DOCUMENT_VERSION_ID,
-                        "observation_id": _OBSERVATION_ID,
-                        "period_end": _PERIOD_END,
-                        "metric": _METRIC_NAME,
-                        "value": _METRIC_VALUE,
-                        "unit": _METRIC_UNIT,
-                        "currency": _METRIC_CURRENCY,
-                        "node_id": _FACT_NODE_ID,
-                        "locator": _FACT_LOCATOR,
-                    },
-                    "matched": True,
-                }
-            ],
-        },
-    )
-
-
-def test_fact_emitter_reconciles_to_its_source_version_route(
-    client: FlaskClient,
-    fixture_db: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The real fact branch queries the migrated schema and resolves inherited entries."""
-    conn = sqlite3.connect(str(fixture_db))
-    conn.row_factory = sqlite3.Row
-    try:
-        entry_columns = {
-            str(row["name"])
-            for row in conn.execute(
-                "PRAGMA table_info(canonical_fact_projection_entries)"
-            ).fetchall()
-        }
-        assert "recorded_at" not in entry_columns
-        projection_entry = conn.execute(
-            "SELECT generation_id,entry_ordinal,canonical_metric_name,canonical_value,"
-            "unit_key,currency,period_end,evidence_document_version_id,evidence_node_id,"
-            "evidence_locator_json FROM canonical_fact_projection_entries "
-            "WHERE generation_id=? AND canonical_metric_cell_id=? AND entry_sha256=?",
-            (_GENERATION_ID, _METRIC_CELL_ID, "d" * 64),
-        ).fetchone()
-        assert projection_entry is not None
-        entry_coordinate = {
-            "generation_id": str(projection_entry["generation_id"]),
-            "entry_ordinal": int(projection_entry["entry_ordinal"]),
-        }
-        conn.execute(
-            "INSERT INTO canonical_fact_projection_generations "
-            "(generation_id,idempotency_key,generation_kind,parent_generation_id,"
-            "delta_depth,resolution_snapshot_id,resolution_snapshot_sha256,"
-            "resolution_watermark_sha256,ontology_snapshot_id,ontology_snapshot_sha256,"
-            "cutoff_at,config_json,config_sha256,digest_bucket_count,max_batch_facts,"
-            "max_batch_bytes,max_batch_milliseconds,generation_json,generation_sha256,"
-            "recorded_at) "
-            "SELECT ?,?,'delta',generation_id,1,resolution_snapshot_id,"
-            "resolution_snapshot_sha256,resolution_watermark_sha256,ontology_snapshot_id,"
-            "ontology_snapshot_sha256,cutoff_at,config_json,config_sha256,digest_bucket_count,"
-            "max_batch_facts,max_batch_bytes,max_batch_milliseconds,generation_json,"
-            "generation_sha256,recorded_at FROM canonical_fact_projection_generations "
-            "WHERE generation_id=?",
-            (_FACT_EMISSION_GENERATION_ID, "idem-generation-acme-head", _GENERATION_ID),
-        )
-        trace_id = "trace-fixture-emission"
-        receipt = HeterogeneousRetrievalReceipt(
-            trace_id=trace_id,
-            trace_sha256="e" * 64,
-            research_snapshot_id="snapshot-fixture-emission",
-            research_snapshot_sha256="f" * 64,
-            fact_generation_id=_FACT_EMISSION_GENERATION_ID,
-            fact_projection_seal_sha256="1" * 64,
-            candidate_count=1,
-            result_count=1,
-            ordered_results=({"result_ordinal": 0, "final_score": "1"},),
-            recorded_at=datetime(2026, 1, 15, 14, 5, tzinfo=UTC),
-        )
-
-        def verify_fixture_trace(
-            _conn: sqlite3.Connection,
-            requested_trace_id: str,
-            *,
-            local_vector_runtime: LocalVectorRuntimeConfig | None = None,
-            verification: RequestVerificationCache | None = None,
-        ) -> HeterogeneousRetrievalReceipt:
-            assert requested_trace_id == trace_id
-            assert local_vector_runtime is None
-            assert verification is None
-            return receipt
-
-        monkeypatch.setattr(
-            sealed_retrieval,
-            "verify_heterogeneous_retrieval_trace",
-            verify_fixture_trace,
-        )
-
-        # This manually seeded route fixture has no native publication graph.
-        # Keep the emitter/query/route real; double only source-context admission.
-        @dataclass(frozen=True)
-        class RouteOnlyBundle:
-            observation_id: str
-
-        @dataclass(frozen=True)
-        class RouteOnlyBundleRead:
-            observation_id: str
-            bundle: RouteOnlyBundle
-            failure: None = None
-
-        class RouteOnlySourceContext:
-            def __init__(self, source_conn: sqlite3.Connection) -> None:
-                assert source_conn is conn
-
-            def provenance_bundles(
-                self, observation_ids: tuple[str, ...], *, cutoff: datetime
-            ) -> tuple[RouteOnlyBundleRead, ...]:
-                assert observation_ids == ("fact-observation-acme-1",)
-                assert cutoff == receipt.recorded_at
-                return (
-                    RouteOnlyBundleRead(observation_ids[0], RouteOnlyBundle(observation_ids[0])),
-                )
-
-        context_calls: list[str] = []
-        context_note = "Route-only fixture context; source admission is not exercised."
-
-        def fixture_source_context(
-            source_conn: sqlite3.Connection,
-            selected_entry: sqlite3.Row,
-            bundle: RouteOnlyBundle,
-            *,
-            source_observation_id: str,
-            knowledge_cutoff: datetime,
-            observed_through: datetime,
-        ) -> str:
-            assert source_conn is conn
-            assert knowledge_cutoff == observed_through == receipt.recorded_at
-            assert bundle.observation_id == selected_entry["selected_observation_id"]
-            assert selected_entry["canonical_metric_cell_id"] == _METRIC_CELL_ID
-            assert selected_entry["evidence_document_version_id"] == _DOCUMENT_VERSION_ID
-            assert selected_entry["evidence_node_id"] == _FACT_NODE_ID
-            assert source_observation_id == _OBSERVATION_ID
-            context_calls.append(bundle.observation_id)
-            return context_note
-
-        monkeypatch.setattr(sealed_retrieval, "FactReadModel", RouteOnlySourceContext)
-        monkeypatch.setattr(sealed_retrieval, "_verified_fact_context", fixture_source_context)
-        cutoff_at = "2026-01-15 14:05:00"
-        conn.execute(
-            "INSERT INTO heterogeneous_retrieval_trace_headers "
-            "(trace_id,idempotency_key,research_snapshot_id,research_snapshot_sha256,"
-            "fact_generation_id,fact_projection_seal_sha256,narrative_commitments_json,"
-            "narrative_commitments_sha256,semantic_receipts_json,semantic_receipts_sha256,"
-            "query_sha256,query_json,ranker_json,ranker_sha256,filters_json,filters_sha256,"
-            "candidate_limit,result_limit,cutoff_at,recorded_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                trace_id,
-                "idem-trace-fixture-emission",
-                receipt.research_snapshot_id,
-                receipt.research_snapshot_sha256,
-                receipt.fact_generation_id,
-                receipt.fact_projection_seal_sha256,
-                "[]",
-                "2" * 64,
-                "[]",
-                "3" * 64,
-                "4" * 64,
-                "{}",
-                "{}",
-                "5" * 64,
-                "{}",
-                "6" * 64,
-                1,
-                1,
-                cutoff_at,
-                cutoff_at,
-            ),
-        )
-        conn.execute(
-            "INSERT INTO heterogeneous_retrieval_trace_candidates "
-            "(trace_id,candidate_ordinal,candidate_kind,candidate_id,"
-            "source_commitment_sha256,lexical_score,semantic_score,normalized_score,"
-            "ranker_name,filter_outcome,filter_reason,evidence_locator_json,lineage_json,"
-            "lineage_sha256,candidate_json,candidate_sha256) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                trace_id,
-                0,
-                "fact",
-                _METRIC_CELL_ID,
-                "d" * 64,
-                None,
-                None,
-                "1",
-                "fixture-ranker",
-                "included",
-                None,
-                json.dumps(_FACT_LOCATOR, sort_keys=True),
-                "{}",
-                "7" * 64,
-                "{}",
-                "8" * 64,
-            ),
-        )
-        conn.execute(
-            "INSERT INTO heterogeneous_retrieval_trace_results "
-            "(trace_id,result_ordinal,candidate_ordinal,final_score,result_json,result_sha256) "
-            "VALUES (?,?,?,?,?,?)",
-            (trace_id, 0, 0, "1", '{"result_ordinal":0,"final_score":"1"}', "9" * 64),
-        )
-        items = sealed_retrieval.load_verified_trace_evidence(conn, trace_id)
-        repeated_items = sealed_retrieval.load_verified_trace_evidence(conn, trace_id)
-        assert len(items) == len(repeated_items) == 1
-        emitted = items[0]
-        repeated = repeated_items[0]
-    finally:
-        conn.close()
-
-    assert emitted == repeated
-    assert emitted.kind == "fact"
-    assert emitted.label == f"{_TICKER} · {_METRIC_NAME} · {_PERIOD_END}"
-    assert context_calls == ["fact-observation-acme-1"] * 2
-    assert emitted.text == (
-        f"{_METRIC_NAME}: {_CITATION_VALUE} ({_PERIOD_END})"
-        f"\nVerified financial context: {context_note}"
-    )
-    assert emitted.value == _CITATION_VALUE
-    assert emitted.period == _PERIOD_END
-    assert emitted.locator == _FACT_LOCATOR
-    assert emitted.document_version_id == _DOCUMENT_VERSION_ID
-    assert emitted.evidence_node_id == _FACT_NODE_ID
-    assert emitted.href == _sealed_source_version_href(_DOCUMENT_VERSION_ID, _FACT_NODE_ID)
-    assert emitted.citation_payload()["source_commitment_sha256"] == "d" * 64
-
-    response = client.get(emitted.href)
-    assert response.status_code == 200
-    parsed = _parse_provenance(response.get_data(as_text=True))
-    fact_rows = parsed.fact_rows
-    assert len(fact_rows) == 1
-    root = parsed.root
-    fact_row = fact_rows[0]
-    assert root["issuer-id"] == _ISSUER_ID
-    assert root["ticker"] == _TICKER
-    assert root["document-version-id"] == emitted.document_version_id
-    assert root["observation-id"] == _OBSERVATION_ID
-    assert root["period-end"] == emitted.period
-    assert fact_row["fact-node-id"] == emitted.evidence_node_id
-    assert fact_row["fact-metric"] == _METRIC_NAME
-    assert fact_row["fact-value"] == _METRIC_VALUE
-    assert fact_row["fact-unit"] == _METRIC_UNIT
-    assert fact_row["fact-currency"] == _METRIC_CURRENCY
-    assert fact_row["fact-period-end"] == emitted.period
-    assert json.loads(fact_row["fact-locator"]) == emitted.locator
-    assert (
-        f"{fact_row['fact-value']} {fact_row['fact-currency']} {fact_row['fact-unit']}"
-        == emitted.value
-    )
-
-    _record_artifact(
-        "sealed-fact-citation-val-search-017-reconciliation.json",
-        {
-            "assertion": "VAL-SEARCH-017",
-            "feature": "sealed-fact-citation-emitter",
-            "scope_note": (
-                "Hermetic migrated fixture only: no bench DB, live retrieval, real trace "
-                "verification, native source-context admission, reseal, promotion, corpus, "
-                "schema/migration change, or "
-                "production claim."
-            ),
-            "selection": {
-                "fact_generation_id": receipt.fact_generation_id,
-                "entry_coordinate": entry_coordinate,
-                "entry_is_inherited_from_ancestor": (
-                    entry_coordinate["generation_id"] != receipt.fact_generation_id
-                ),
-                "repeated_emission_equal": emitted == repeated,
-            },
-            "emitted": {
-                "href": emitted.href,
-                "metric": _METRIC_NAME,
-                "value": emitted.value,
-                "unit": _METRIC_UNIT,
-                "currency": _METRIC_CURRENCY,
-                "period": emitted.period,
-                "locator": emitted.locator,
-                "document_version_id": emitted.document_version_id,
-                "evidence_node_id": emitted.evidence_node_id,
-                "source_commitment_sha256": emitted.source_commitment_sha256,
-            },
-            "route": {
-                "status": response.status_code,
-                "issuer_id": root["issuer-id"],
-                "ticker": root["ticker"],
-                "document_version_id": root["document-version-id"],
-                "observation_id": root["observation-id"],
-                "period_end": root["period-end"],
-                "fact_metric": fact_row["fact-metric"],
-                "fact_value": fact_row["fact-value"],
-                "fact_unit": fact_row["fact-unit"],
-                "fact_currency": fact_row["fact-currency"],
-                "fact_node_id": fact_row["fact-node-id"],
-                "fact_locator": json.loads(fact_row["fact-locator"]),
-            },
-            "matched": True,
-        },
     )
 
 

@@ -78,9 +78,8 @@ def test_0076_purges_only_quarantined_facts_and_restores_triggers(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    db_path = migrated_db(tmp_path / "portfolio.db")
+    db_path = migrated_db(tmp_path / "portfolio.db", target=_PRIOR_REVISION)
     cfg = _config(db_path)
-    command.downgrade(cfg, _PRIOR_REVISION)
 
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
