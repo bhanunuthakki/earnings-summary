@@ -716,3 +716,150 @@ def test_52_53_week_fye_requires_reported_db_witness_and_authorizes_qcom(
         )
         assert unwitnessed_q3.status is TranscriptAuthorizationStatus.DENIED
         assert unwitnessed_q3.reason is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_DENIED
+
+
+def test_reported_period_witness_documents_short_circuit_and_facts_fallback(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from provenance import financial_fact_resolution
+
+    db_path = migrated_db(tmp_path / "witness.db")
+    qcom_q4_req = TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+        canonical_ticker="QCOM",
+        fiscal_year=2026,
+        fiscal_quarter=4,
+        as_of=date(2026, 11, 25),
+        source_type=SourceType.IR_DOC,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+        owner_requested=True,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, fiscal_year_end, instrument_type) "
+            "VALUES ('QCOM', 'Qualcomm', 'portfolio', '09-28', 'equity')"
+        )
+        conn.execute(
+            "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, "
+            "sha256, fetched_at, fetch_status, raw_bytes_size, source_url) VALUES "
+            "('QCOM', 'ir_doc', 'ir_press_release', '2026-09-30 00:00:00', "
+            "'ir_documents/QCOM/pr.pdf', ?, '2026-11-05T00:00:00', 'ok', 100, "
+            "'https://investor.qualcomm.com/q4.pdf')",
+            ("3" * 64,),
+        )
+        conn.commit()
+
+        # Case 1: documents already witnesses target Q4 2026 -> canonical_fact_relation is NOT called.
+        calls: list[str] = []
+
+        def _fail_if_called(
+            _conn: sqlite3.Connection, fact_table: str
+        ) -> financial_fact_resolution.CanonicalFactRelation:
+            calls.append(fact_table)
+            raise AssertionError(
+                "canonical_fact_relation should not be queried when documents covers target"
+            )
+
+        monkeypatch.setattr(financial_fact_resolution, "canonical_fact_relation", _fail_if_called)
+        auth = authorize_transcript_request(conn, qcom_q4_req)
+        assert auth.status is TranscriptAuthorizationStatus.AUTHORIZED
+        assert calls == []
+
+    # Case 2: documents only has an old 2024 filing, while financial_facts has the 2026-09-27 witness.
+    monkeypatch.undo()
+    with sqlite3.connect(":memory:") as fallback_conn:
+        _setup_db(fallback_conn)
+        fallback_conn.execute(
+            "CREATE TABLE financial_facts (ticker TEXT, period_end TEXT, fiscal_period_type TEXT)"
+        )
+        fallback_conn.execute(
+            "INSERT INTO tracked_companies VALUES ('QCOM', 'portfolio', NULL, '09-28', 'equity')"
+        )
+        fallback_conn.execute(
+            "INSERT INTO documents VALUES (1, 'QCOM', 'sec_filing', '10-K', '2024-09-29', "
+            "'sec/QCOM_2024_10K.htm', ?, 100, 'https://sec.gov/qcom-2024')",
+            ("4" * 64,),
+        )
+        fallback_conn.execute("INSERT INTO financial_facts VALUES ('QCOM', '2026-09-27', 'Q4')")
+
+        auth_fallback = authorize_transcript_request(fallback_conn, qcom_q4_req)
+        assert auth_fallback.status is TranscriptAuthorizationStatus.AUTHORIZED
+        assert auth_fallback.stored_target.reported_window is not None
+        assert date(2026, 9, 30) in auth_fallback.stored_target.reported_window.period_ends
+        assert date(2024, 9, 30) in auth_fallback.stored_target.reported_window.period_ends
+
+
+def test_reported_period_witness_queries_use_indexes_in_migrated_schema(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    db_path = migrated_db(tmp_path / "witness_plan.db")
+    qcom_q4_req = TranscriptAcquisitionRequest(
+        schema_version="transcript-acquisition-request@2",
+        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
+        canonical_ticker="QCOM",
+        fiscal_year=2026,
+        fiscal_quarter=4,
+        as_of=date(2026, 11, 25),
+        source_type=SourceType.IR_DOC,
+        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
+        provider=TranscriptProvider.GOOGLE_FINANCE_BETA,
+        owner_requested=True,
+        existing_artifact=False,
+        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
+        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
+        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
+    )
+
+    traced_sql: list[str] = []
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, fiscal_year_end, instrument_type) "
+            "VALUES ('QCOM', 'Qualcomm', 'portfolio', '09-28', 'equity')"
+        )
+        conn.commit()
+
+        # With no documents row, authorize_transcript_request executes both the documents
+        # witness query and the canonical financial_facts fallback query.
+        conn.set_trace_callback(traced_sql.append)
+        try:
+            authorize_transcript_request(conn, qcom_q4_req)
+        finally:
+            conn.set_trace_callback(None)
+
+        doc_queries = [
+            sql for sql in traced_sql if "SELECT DISTINCT date(period_end) FROM documents" in sql
+        ]
+        fact_queries = [
+            sql
+            for sql in traced_sql
+            if "SELECT DISTINCT date(period_end) FROM (SELECT fact.* FROM v_financial_facts_resolved_current"
+            in sql
+        ]
+        assert doc_queries, traced_sql
+        assert fact_queries, traced_sql
+
+        doc_plan = [
+            str(row[3]) for row in conn.execute(f"EXPLAIN QUERY PLAN {doc_queries[0]}").fetchall()
+        ]
+        assert any("ix_documents_ticker_doctype_period" in step for step in doc_plan), doc_plan
+        assert not any("SCAN documents" in step for step in doc_plan), doc_plan
+
+        fact_plan = [
+            str(row[3]) for row in conn.execute(f"EXPLAIN QUERY PLAN {fact_queries[0]}").fetchall()
+        ]
+        assert any("uq_financial_facts_provenance" in step for step in fact_plan), fact_plan
+        assert not any(
+            "SEARCH link USING INDEX sqlite_autoindex_fact_observation_revisions_1 (fact_table=?)"
+            in step
+            for step in fact_plan
+        ), fact_plan

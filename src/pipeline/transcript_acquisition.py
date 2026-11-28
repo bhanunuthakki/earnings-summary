@@ -204,35 +204,50 @@ _REPORTED_WITNESS_DOC_TYPES = (
 )
 
 
+def _indexed_ticker_predicate(ticker: str) -> tuple[str, tuple[str, ...]]:
+    """Build an index-friendly case-tolerant ticker predicate (avoiding ``UPPER(ticker)``)."""
+    variants = tuple(dict.fromkeys((ticker.upper(), ticker.lower(), ticker)))
+    if len(variants) == 1:
+        return "ticker=?", variants
+    placeholders = ",".join("?" for _ in variants)
+    return f"ticker IN ({placeholders})", variants
+
+
+def _witness_covers_period_end(witnesses: set[date], target_period_end: date) -> bool:
+    return any(abs((w - target_period_end).days) <= 7 for w in witnesses)
+
+
+def _parse_witness_dates(rows: Sequence[Sequence[object]]) -> set[date]:
+    parsed: set[date] = set()
+    for row in rows:
+        raw_date = str(row[0] or "").strip()
+        if len(raw_date) >= 10:
+            try:
+                parsed.add(date.fromisoformat(raw_date[:10]))
+            except ValueError:
+                continue
+    return parsed
+
+
 def _reported_period_witness_dates(
     conn: sqlite3.Connection,
     *,
     ticker: str,
     as_of: date,
+    target_period_end: date | None = None,
 ) -> set[date]:
-    """Collect reported `period_end` dates (<= `as_of`) from canonical facts and reported docs."""
-    from provenance.financial_fact_resolution import canonical_fact_relation
+    """Collect reported `period_end` dates (<= `as_of`) from reported docs, falling back to facts.
 
+    Queries ``documents`` first using the indexed ``(ticker, doc_type, period_end)``
+    lookup. When ``target_period_end`` is already witnessed by ``documents`` within
+    ±7 days, returns immediately without touching ``v_financial_facts_resolved_current``.
+    Otherwise falls back to the index-backed ``canonical_fact_relation`` lookup so
+    issuers whose latest quarter exists only in ``financial_facts`` keep full coverage.
+    """
     witnesses: set[date] = set()
-    ticker_upper = ticker.upper()
     as_of_iso = as_of.isoformat()
-
-    try:
-        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
-        rows = conn.execute(
-            f"SELECT DISTINCT date(period_end) FROM {fact_relation} "  # nosec B608 -- closed internal relation from canonical_fact_relation
-            "WHERE UPPER(ticker)=? AND period_end IS NOT NULL AND date(period_end)<=date(?)",
-            (ticker_upper, as_of_iso),
-        ).fetchall()
-        for row in rows:
-            raw_date = str(row[0] or "").strip()
-            if len(raw_date) >= 10:
-                try:
-                    witnesses.add(date.fromisoformat(raw_date[:10]))
-                except ValueError:
-                    continue
-    except (sqlite3.Error, ValueError):
-        pass
+    as_of_upper = (as_of + timedelta(days=1)).isoformat() if as_of < date.max else "9999-12-32"
+    ticker_pred, ticker_params = _indexed_ticker_predicate(ticker)
 
     doc_cols: set[str]
     try:
@@ -247,19 +262,30 @@ def _reported_period_witness_dates(
         try:
             doc_rows = conn.execute(
                 "SELECT DISTINCT date(period_end) FROM documents "
-                f"WHERE UPPER(ticker)=? AND period_end IS NOT NULL AND date(period_end)<=date(?) "  # nosec B608 -- placeholder count from constant tuple
-                f"AND doc_type IN ({placeholders}){status_clause}",
-                (ticker_upper, as_of_iso, *_REPORTED_WITNESS_DOC_TYPES),
+                f"WHERE {ticker_pred} AND doc_type IN ({placeholders}) "  # nosec B608 -- placeholder counts from bounded ticker variants and constant tuple
+                f"AND period_end IS NOT NULL AND period_end<? AND date(period_end)<=date(?){status_clause}",
+                (*ticker_params, *_REPORTED_WITNESS_DOC_TYPES, as_of_upper, as_of_iso),
             ).fetchall()
-            for row in doc_rows:
-                raw_date = str(row[0] or "").strip()
-                if len(raw_date) >= 10:
-                    try:
-                        witnesses.add(date.fromisoformat(raw_date[:10]))
-                    except ValueError:
-                        continue
+            witnesses.update(_parse_witness_dates(doc_rows))
         except sqlite3.Error:
             pass
+
+    if target_period_end is not None and _witness_covers_period_end(witnesses, target_period_end):
+        return witnesses
+
+    from provenance.financial_fact_resolution import canonical_fact_relation
+
+    try:
+        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
+        rows = conn.execute(
+            f"SELECT DISTINCT date(period_end) FROM {fact_relation} "  # nosec B608 -- closed internal relation from canonical_fact_relation
+            f"WHERE {ticker_pred} AND period_end IS NOT NULL AND period_end<? "
+            "AND date(period_end)<=date(?)",
+            (*ticker_params, as_of_upper, as_of_iso),
+        ).fetchall()
+        witnesses.update(_parse_witness_dates(rows))
+    except (sqlite3.Error, ValueError):
+        pass
 
     return witnesses
 
@@ -302,6 +328,8 @@ def _calendar_reported_period_window(
     as_of: date,
     max_quarters: int = 8,
     include_all_transcript_docs: bool = False,
+    target_fiscal_year: int | None = None,
+    target_fiscal_quarter: int | None = None,
 ) -> ReportedPeriodWindow | None:
     fye = _derive_fiscal_year_end(
         conn,
@@ -311,10 +339,25 @@ def _calendar_reported_period_window(
     if fye is None or fiscal_year_end_month is None:
         return None
     if _is_52_53_week_fye(fye, fiscal_year_end_month):
-        witnesses = _reported_period_witness_dates(conn, ticker=ticker, as_of=as_of)
+        canonical_fye = _month_end_mmdd(fiscal_year_end_month)
+        target_period_end: date | None = None
+        if target_fiscal_year is not None and target_fiscal_quarter is not None:
+            try:
+                target_period_end = fiscal_quarter_end(
+                    fiscal_year=target_fiscal_year,
+                    fiscal_quarter=target_fiscal_quarter,
+                    fiscal_year_end=canonical_fye,
+                )
+            except ValueError:
+                target_period_end = None
+        witnesses = _reported_period_witness_dates(
+            conn,
+            ticker=ticker,
+            as_of=as_of,
+            target_period_end=target_period_end,
+        )
         if not witnesses:
             return None
-        canonical_fye = _month_end_mmdd(fiscal_year_end_month)
         witnessed_ends: set[date] = set()
         for fy in range(as_of.year - 4, as_of.year + 2):
             for fq in (1, 2, 3, 4):
@@ -326,7 +369,7 @@ def _calendar_reported_period_window(
                     )
                 except ValueError:
                     continue
-                if any(abs((w - q_end).days) <= 7 for w in witnesses):
+                if _witness_covers_period_end(witnesses, q_end):
                     witnessed_ends.add(q_end)
         ordered_witnessed = tuple(sorted(witnessed_ends, reverse=True)[:max_quarters])
         if not ordered_witnessed:
@@ -493,6 +536,8 @@ def _stored_target_for_request(
                 ticker=request.canonical_ticker,
                 fiscal_year_end_month=stored.fiscal_year_end_month,
                 as_of=request.as_of,
+                target_fiscal_year=request.fiscal_year,
+                target_fiscal_quarter=request.fiscal_quarter,
             )
             if calendar_window is not None:
                 reported_window = calendar_window
@@ -525,6 +570,8 @@ def _stored_target_for_request(
                     as_of=request.as_of,
                     max_quarters=12,
                     include_all_transcript_docs=True,
+                    target_fiscal_year=request.fiscal_year,
+                    target_fiscal_quarter=request.fiscal_quarter,
                 )
                 if (
                     expanded_window is not None
