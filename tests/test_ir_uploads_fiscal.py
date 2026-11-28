@@ -387,3 +387,20 @@ def test_classify_detects_uber_and_tsm_without_calendar_override(
     assert res.doc_type is DocType.IR_SUPPLEMENT
     assert res.period_end == date(2026, 9, 30)
     assert res.period_label == "Q3 2026"
+
+
+def test_classify_pdf_supplemental_data_filename_is_ir_supplement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pdf_path = tmp_path / "Uber-Q3-26-Earnings-Supplemental-Data.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    def _fingerprint_stub(_path: Path) -> str:
+        return "Uber Technologies, Inc.\nQ3 2026 Metrics for the quarter ended September 30, 2026."
+
+    monkeypatch.setattr(ir_uploads, "fingerprint", _fingerprint_stub)
+    res = classify_ir_file(pdf_path, ticker_hint="UBER")
+    assert isinstance(res, CategorizationResult)
+    assert res.ticker == "UBER"
+    assert res.doc_type is DocType.IR_SUPPLEMENT
+    assert res.period_end == date(2026, 9, 30)

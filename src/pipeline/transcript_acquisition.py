@@ -1537,6 +1537,54 @@ def _safe_retained_file_path(
     return (resolved, rel_posix)
 
 
+def _resolve_retained_transcript_artifact(
+    resolved_root: Path,
+    file_path_raw: str,
+    *,
+    expected_sha256: str,
+    expected_size: int,
+    doc_source_type: str,
+    doc_source_url: str | None,
+) -> tuple[Path, PurePosixPath, bytes] | str:
+    """Resolve retained transcript bytes or return the fail-closed skip reason."""
+    resolved_pair = _safe_retained_file_path(resolved_root, file_path_raw)
+    if resolved_pair is None:
+        primary_failure = "artifact_missing_or_unsafe"
+    else:
+        disk_path, rel_posix = resolved_pair
+        disk_bytes = disk_path.read_bytes()
+        if len(disk_bytes) != expected_size:
+            primary_failure = "artifact_size_mismatch"
+        elif hashlib.sha256(disk_bytes).hexdigest() != expected_sha256:
+            primary_failure = "artifact_hash_mismatch"
+        else:
+            return (disk_path, rel_posix, disk_bytes)
+
+    # Legacy pre-receipt aggregator rows sometimes still record transcripts/raw/<name>
+    # after ingest moved the exact bytes into transcripts/processed/<name>.
+    if doc_source_type == SourceType.TRANSCRIPT_AUDIO.value and doc_source_url is None:
+        raw_posix = PurePosixPath(file_path_raw.replace("\\", "/"))
+        if (
+            not raw_posix.is_absolute()
+            and ".." not in raw_posix.parts
+            and raw_posix.parent == PurePosixPath("transcripts/raw")
+            and raw_posix.name
+        ):
+            fallback_pair = _safe_retained_file_path(
+                resolved_root, f"transcripts/processed/{raw_posix.name}"
+            )
+            if fallback_pair is not None:
+                fb_disk_path, fb_rel_posix = fallback_pair
+                fb_bytes = fb_disk_path.read_bytes()
+                if (
+                    len(fb_bytes) == expected_size
+                    and hashlib.sha256(fb_bytes).hexdigest() == expected_sha256
+                ):
+                    return (fb_disk_path, fb_rel_posix, fb_bytes)
+
+    return primary_failure
+
+
 def admit_retained_transcripts(
     conn: sqlite3.Connection,
     *,
@@ -1637,18 +1685,18 @@ def admit_retained_transcripts(
             )
             continue
 
-        resolved_pair = _safe_retained_file_path(resolved_root, file_path_raw)
-        if resolved_pair is None:
-            _record_skip(row, "artifact_missing_or_unsafe")
+        resolved_artifact = _resolve_retained_transcript_artifact(
+            resolved_root,
+            file_path_raw,
+            expected_sha256=expected_sha256,
+            expected_size=expected_size,
+            doc_source_type=doc_source_type,
+            doc_source_url=doc_source_url,
+        )
+        if isinstance(resolved_artifact, str):
+            _record_skip(row, resolved_artifact)
             continue
-        disk_path, rel_posix = resolved_pair
-        disk_bytes = disk_path.read_bytes()
-        if len(disk_bytes) != expected_size:
-            _record_skip(row, "artifact_size_mismatch")
-            continue
-        if hashlib.sha256(disk_bytes).hexdigest() != expected_sha256:
-            _record_skip(row, "artifact_hash_mismatch")
-            continue
+        disk_path, rel_posix, disk_bytes = resolved_artifact
 
         coord = _resolve_transcript_fiscal_coordinate(
             conn,
