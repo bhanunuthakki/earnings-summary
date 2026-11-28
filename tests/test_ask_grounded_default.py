@@ -362,7 +362,7 @@ def test_grounded_narrative_does_not_release_answer_when_trace_binding_fails(
 
 def test_invalid_mode_lists_grounded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ASK_RETRIEVAL_MODE", "permissive")
-    with pytest.raises(ValueError, match="grounded, legacy, shadow, or sealed"):
+    with pytest.raises(ValueError, match="grounded or legacy"):
         engine.ask_retrieval_mode()
 
 

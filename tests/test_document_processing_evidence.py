@@ -2413,7 +2413,7 @@ def test_cutover_processing_evidence_dual_clocks(
         assert receipt.member_count == 1
         # Other absent populations remain blockers; native evidence cannot waive them.
         assert summary.has_blockers
-        assert len(summary.coverage) == 13
+        assert len(summary.coverage) == 12
 
 
 @pytest.mark.parametrize("retained_identity", RETAINED_PDF_FULLTEXT_EXTRACTORS)

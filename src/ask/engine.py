@@ -55,7 +55,7 @@ from typing import Literal, Self, cast
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from ask import narrative_transport
-from ask.claims import STRICT_NO_ANSWER, build_citations_payload
+from ask.claims import STRICT_NO_ANSWER, build_citations_payload, required_claim_spans
 from ask.context import ContextPack, tracked_tickers
 from ask.followup import (
     followup_armed,
@@ -341,6 +341,37 @@ class _ClaimAuditOutput(BaseModel):
 
 
 CLAIM_AUDIT_ADAPTER = TypeAdapter(_ClaimAuditOutput)
+
+
+_NO_SEALED_EVIDENCE_EXACT = "I don't have enough sealed evidence to answer that."
+
+
+def _validate_claim_audit_output(
+    answer: str,
+    valid_numbers: set[int],
+    audited: _ClaimAuditOutput,
+) -> None:
+    """Deterministic delivery gate over a schema-decoded auditor verdict."""
+
+    expected_spans = required_claim_spans(answer)
+    actual_spans = tuple(
+        (claim.char_start, claim.char_end, claim.quote) for claim in audited.claims
+    )
+    for claim in audited.claims:
+        if claim.char_end > len(answer) or answer[claim.char_start : claim.char_end] != claim.quote:
+            raise ValueError("claim audit quote does not equal its exact answer span")
+        if any(number not in valid_numbers for number in claim.cites):
+            raise ValueError("claim audit cites evidence outside the sealed prompt")
+    if answer.strip() == _NO_SEALED_EVIDENCE_EXACT:
+        if audited.claims:
+            raise ValueError("the exact no-answer exemption must contain zero claims")
+        return
+    if actual_spans != expected_spans:
+        raise ValueError(
+            "claim audit must cover every substantive clause exactly once without gaps"
+        )
+    if any(not claim.supported for claim in audited.claims):
+        raise ValueError("sealed answer contains an unsupported substantive claim")
 
 
 @dataclass(slots=True)

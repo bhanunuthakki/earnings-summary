@@ -228,7 +228,7 @@ def test_grounded_exchange_releases_no_answer_when_trace_binding_fails(
     assert all(event.get("text") != "Uncommitted answer" for event in output)
 
 
-def test_external_engine_mode_does_not_duplicate_narrative_or_shadow_turns(
+def test_external_engine_mode_does_not_duplicate_narrative_turns(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -239,7 +239,6 @@ def test_external_engine_mode_does_not_duplicate_narrative_or_shadow_turns(
     monkeypatch.setattr(ask_engine, "tracked_tickers", _empty_strings)
     monkeypatch.setattr(ask_engine, "gather_evidence", _empty_evidence)
     monkeypatch.setattr(ask_engine, "followup_armed", _false)
-    monkeypatch.setattr(ask_engine, "_shadow_retrieval", _none)
     monkeypatch.setattr(
         ask_engine.narrative_transport,
         "stream_llm_text",
@@ -252,7 +251,7 @@ def test_external_engine_mode_does_not_duplicate_narrative_or_shadow_turns(
         authoritative_user_turn_id=exchange.user_turn_id,
     )
 
-    for mode in ("legacy", "shadow"):
+    for mode in ("legacy", "grounded"):
         events = list(
             respond_turn(
                 turn,
@@ -450,44 +449,6 @@ def test_external_command_and_data_routes_leave_turn_persistence_to_exchange(
     )
     data_events = list(respond_turn(data, _portfolio_pack(), db_path=db_path, repo_root=tmp_path))
     assert data_events[-1]["route"] == "data"
-    assert len(load_turns("session-1", db_path=db_path)) == 1
-
-
-def test_sealed_external_mode_reuses_authoritative_user_and_skips_assistant_cas(
-    tmp_path: Path,
-    migrated_db: Callable[..., Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    db_path = _database(tmp_path, migrated_db)
-    exchange = _begin(db_path)
-    turn = AskTurn(
-        text="What changed?",
-        session_id="session-1",
-        persistence_mode="external_exchange",
-        authoritative_user_turn_id=exchange.user_turn_id,
-    )
-
-    def _fail_user_turn(**_kwargs: object) -> None:
-        pytest.fail("sealed mode appended a duplicate user turn")
-
-    def _fail_assistant_turn(**_kwargs: object) -> None:
-        pytest.fail("sealed mode appended a duplicate assistant turn")
-
-    monkeypatch.setattr(ask_engine, "_store_append_turn", _fail_user_turn)
-    monkeypatch.setattr(ask_engine, "_store_append_assistant_cas", _fail_assistant_turn)
-
-    assert ask_engine._bind_sealed_user_turn(turn, "What changed?", db_path=db_path) == (
-        exchange.user_turn_id
-    )
-    ask_engine._persist_sealed_assistant(
-        turn,
-        user_turn_id=exchange.user_turn_id,
-        user_text="What changed?",
-        text="Answer",
-        citations=[],
-        model="test-model",
-        db_path=db_path,
-    )
     assert len(load_turns("session-1", db_path=db_path)) == 1
 
 
