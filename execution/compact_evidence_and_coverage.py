@@ -91,6 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prune expected_documents coverage chains for strictly index_member-only issuers",
     )
     parser.add_argument(
+        "--prune-uncaptured-sec-attachments",
+        action="store_true",
+        help=(
+            "Prune uncaptured sec_financial_report, sec_supporting_attachment, and sec_exhibit "
+            "expected_documents chains while preserving all primary filings and captured documents"
+        ),
+    )
+    parser.add_argument(
         "--prune-inactive-filing-sections",
         action="store_true",
         help="Prune inactive (is_active=0) and index_member-only filing_sections rows",
@@ -132,6 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_size=int(args.batch_size),
             archive_substantive_nodes=bool(args.archive_substantive_nodes),
             prune_index_member_coverage=bool(args.prune_index_member_coverage),
+            prune_uncaptured_sec_attachments=bool(args.prune_uncaptured_sec_attachments),
             prune_inactive_filing_sections=bool(args.prune_inactive_filing_sections),
             prune_unreferenced_legacy_matches=bool(args.prune_unreferenced_legacy_matches),
             vacuum=bool(args.vacuum),

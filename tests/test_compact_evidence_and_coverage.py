@@ -1863,3 +1863,165 @@ def test_six_readers_and_corpus_rehydration_after_full_substantive_compaction(
             "rdr-row",
             "rdr-cell",
         ]
+
+
+def test_step_b_prunes_only_uncaptured_sec_attachments_and_preserves_captured_and_primary(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    """--prune-uncaptured-sec-attachments removes uncaptured report/supporting/exhibit rows only."""
+    from typing import cast
+
+    from provenance.integrity_audit import AuditOptions, audit_connection
+
+    state_root = tmp_path / "state"
+    db_path = migrated_db(state_root / "data" / "portfolio.db")
+
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type) VALUES "
+            "('PORT1', 'Portfolio Co', 'portfolio')"
+        )
+        inv_sha = _sha("inv-payload")
+        conn.execute(
+            "INSERT INTO evidence_content_blobs (sha256, byte_size, media_type, storage_uri, recorded_at) "
+            "VALUES (?, 11, 'application/json', 'file:///inv.json', ?)",
+            (inv_sha, STAMP.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO evidence_source_observations ("
+            "observation_id, idempotency_key, source_kind, source_url, blob_sha256, "
+            "observed_at, retrieved_at, retrieval_config_sha256, collector_code_version"
+            ") VALUES ('obs-inv', 'obs-inv', 'sec_submissions_index', "
+            "'https://data.sec.gov/submissions/CIK0000000001.json', ?, ?, ?, ?, 'test.v1')",
+            (inv_sha, STAMP.isoformat(), STAMP.isoformat(), "a" * 64),
+        )
+        conn.execute(
+            "INSERT INTO issuer_entities (issuer_id, idempotency_key, entity_kind, created_at) "
+            "VALUES ('iss-port', 'iss-port', 'operating_company', ?)",
+            (STAMP.isoformat(),),
+        )
+        conn.execute(
+            "INSERT INTO source_inventory_snapshots ("
+            "snapshot_id, idempotency_key, inventory_key, revision, issuer_id, ticker, "
+            "source_kind, source_url, source_observation_id, outcome, authoritative, "
+            "retrieval_config_sha256, collector_code_version, started_at, completed_at, recorded_at"
+            ") VALUES ('snap-iss-port', 'snap-iss-port', 'inv:iss-port', 1, 'iss-port', 'PORT1', "
+            "'sec_submissions', 'https://data.sec.gov/submissions/CIK0000000001.json', 'obs-inv', "
+            "'succeeded', 1, ?, 'test.v1', ?, ?, ?)",
+            ("b" * 64, STAMP.isoformat(), STAMP.isoformat(), STAMP.isoformat()),
+        )
+        # Seed primary 'filing' (must be preserved) plus 5 SEC attachments:
+        # 1. uncaptured sec_financial_report (R2.htm) -> PRUNE
+        # 2. uncaptured sec_supporting_attachment (-index.html) -> PRUNE
+        # 3. uncaptured sec_exhibit (ex99-1.htm) -> PRUNE
+        # 4. captured sec_financial_report (document_version_id linked / captured) -> KEEP
+        # 5. failed sec_supporting_attachment (fetch_failed) -> KEEP
+        extra_docs = [
+            ("ed-iss-port", "filing", "available", False),
+            ("ed-att-r2", "sec_financial_report", "available", False),
+            ("ed-att-idx", "sec_supporting_attachment", "authority_unavailable", False),
+            ("ed-att-ex", "sec_exhibit", "available", False),
+            ("ed-att-cap", "sec_financial_report", "captured", True),
+            ("ed-att-fail", "sec_supporting_attachment", "fetch_failed", False),
+        ]
+        # Seed a DocumentVersion for the captured attachment.
+        blob_sha = _sha("captured-report")
+        conn.execute(
+            "INSERT INTO evidence_content_blobs (sha256, byte_size, media_type, storage_uri, recorded_at) "
+            "VALUES (?, 15, 'text/html', 'file:///captured.htm', ?)",
+            (blob_sha, STAMP.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO evidence_source_observations ("
+            "observation_id, idempotency_key, source_kind, source_url, blob_sha256, "
+            "observed_at, retrieved_at, retrieval_config_sha256, collector_code_version"
+            ") VALUES ('obs-cap', 'obs-cap', 'sec_filing_document', 'https://sec.test/cap.htm', ?, ?, ?, ?, 'test.v1')",
+            (blob_sha, STAMP.isoformat(), STAMP.isoformat(), "a" * 64),
+        )
+        conn.execute(
+            "INSERT INTO evidence_document_versions ("
+            "document_version_id, document_key, version_sequence, observation_id, blob_sha256, "
+            "issuer_id, ticker, document_type, form_type, language, recorded_at"
+            ") VALUES ('doc-cap', 'doc-cap-key', 1, 'obs-cap', ?, 'iss-port', 'PORT1', "
+            "'sec_financial_report', '10-Q', 'en', ?)",
+            (blob_sha, STAMP.isoformat()),
+        )
+        for ed_id, doc_type, cov_status, link_doc in extra_docs:
+            conn.execute(
+                "INSERT INTO expected_documents ("
+                "expected_document_id, idempotency_key, snapshot_id, expected_document_key, "
+                "issuer_id, ticker, source_kind, document_type, expectation_basis, recorded_at"
+                ") VALUES (?, ?, 'snap-iss-port', ?, 'iss-port', 'PORT1', 'sec_filing', ?, 'authoritative', ?)",
+                (ed_id, ed_id, f"key:{ed_id}", doc_type, STAMP.isoformat()),
+            )
+            conn.execute(
+                "INSERT INTO source_coverage_assessments ("
+                "assessment_id, idempotency_key, expected_document_id, revision, coverage_status, "
+                "document_version_id, reason_code, reason_details_json, decision_kind, "
+                "policy_name, policy_version, policy_config_sha256, effective_at, knowledge_at, "
+                "recorded_at, supersedes_assessment_id, material_dissent"
+                ") VALUES (?, ?, ?, 1, ?, ?, 'init', '{}', 'deterministic', 'pol', 'v1', ?, ?, ?, ?, NULL, 0)",
+                (
+                    f"asm-{ed_id}",
+                    f"asm-{ed_id}",
+                    ed_id,
+                    cov_status,
+                    "doc-cap" if link_doc else None,
+                    "c" * 64,
+                    STAMP.isoformat(),
+                    STAMP.isoformat(),
+                    STAMP.isoformat(),
+                ),
+            )
+        conn.commit()
+
+    with sqlite3.connect(db_path) as conn:
+        audit_before = {
+            f.code for f in audit_connection(conn, AuditOptions(deep_sqlite_checks=False)).findings
+        }
+
+    # Dry-run reports the 3 uncaptured attachments without mutating anything.
+    dry_receipt = evidence_compaction.run_compaction(
+        evidence_compaction.CompactionOptions(
+            db_path=db_path,
+            state_root=state_root,
+            project_root=tmp_path,
+            apply=False,
+            prune_uncaptured_sec_attachments=True,
+        )
+    )
+    dry_sec = cast(dict[str, object], dry_receipt["step_b_uncaptured_sec_attachments"])
+    assert dry_sec["enabled"] is True
+    assert dry_sec["eligible_expected_documents"] == 3
+    assert dry_sec["deleted_expected_documents"] == 0
+
+    # Apply prunes exactly those 3 attachments and preserves primary filings + captured + failed.
+    rc = compactor.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--state-root",
+            str(state_root),
+            "--apply",
+            "--prune-uncaptured-sec-attachments",
+            "--vacuum",
+        ]
+    )
+    assert rc == 0
+
+    with sqlite3.connect(db_path) as conn:
+        remaining = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT expected_document_id FROM expected_documents"
+            ).fetchall()
+        }
+        assert remaining.isdisjoint({"ed-att-r2", "ed-att-idx", "ed-att-ex"})
+        assert {"ed-iss-port", "ed-att-cap", "ed-att-fail"} <= remaining
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+        audit_after = {
+            f.code for f in audit_connection(conn, AuditOptions(deep_sqlite_checks=False)).findings
+        }
+        assert audit_after <= audit_before
