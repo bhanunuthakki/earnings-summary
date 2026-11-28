@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -559,3 +560,225 @@ def test_detect_qa_section_google_finance_beta_prepared_remarks_only_is_absent()
     result = detect_qa_section(text)
     assert result.status is QASectionStatus.ABSENT
     assert result.signals == ()
+
+
+# ---------------------------------------------------------------------------
+# Ingest-time Q&A-first winner selection
+# ---------------------------------------------------------------------------
+
+
+def _qa_first_ingest_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            doc_type TEXT NOT NULL,
+            period_start TIMESTAMP,
+            period_end TIMESTAMP,
+            file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL UNIQUE,
+            fetched_at TIMESTAMP NOT NULL,
+            fetch_status TEXT NOT NULL,
+            http_code INTEGER,
+            raw_bytes_size INTEGER NOT NULL,
+            source_url TEXT,
+            parent_document_id INTEGER
+        );
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL UNIQUE,
+            ticker TEXT NOT NULL,
+            call_date TIMESTAMP,
+            fiscal_period_type TEXT,
+            period_end TIMESTAMP,
+            source_url TEXT,
+            has_qa_section INTEGER,
+            source TEXT,
+            version_number INTEGER NOT NULL DEFAULT 1,
+            is_current INTEGER NOT NULL DEFAULT 1,
+            recorded_at TIMESTAMP,
+            superseded_at TIMESTAMP,
+            superseded_by_transcript_id INTEGER,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            superseded_by_id INTEGER,
+            selection_reason TEXT
+        );
+        CREATE TABLE transcript_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transcript_id INTEGER NOT NULL,
+            seq INTEGER NOT NULL,
+            speaker TEXT,
+            speaker_role TEXT,
+            time_code_start TEXT,
+            time_code_end TEXT,
+            text TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX uq_transcripts_current_ticker_period_type_end
+            ON transcripts(ticker, fiscal_period_type, period_end)
+            WHERE is_current = 1;
+        """
+    )
+    return conn
+
+
+def test_ingest_qa_google_finance_beta_supersedes_no_qa_ir_transcript(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import json
+
+    from compute import transcript_ingest
+
+    conn = _qa_first_ingest_conn()
+    ir_file = tmp_path / "ir_documents" / "UBER" / "2026-09-30" / "ir_transcript.txt"
+    ir_file.parent.mkdir(parents=True)
+    ir_body = _padded(
+        "Dara Khosrowshahi\nPrepared remarks for Q3 2026.\n"
+        "Prashanth Mahendra-Rajah\nStrong free cash flow.\n"
+    )
+    ir_file.write_text(ir_body, encoding="utf-8")
+    old_doc_id = transcript_ingest._insert_document(  # pyright: ignore[reportPrivateUsage]
+        conn,
+        ticker="UBER",
+        file_path=ir_file,
+        sha256="1" * 64,
+        period_end=datetime(2026, 9, 30),
+        project_root=tmp_path,
+    )
+    old_tid = transcript_ingest._insert_transcript(  # pyright: ignore[reportPrivateUsage]
+        conn,
+        document_id=old_doc_id,
+        ticker="UBER",
+        fiscal_period_type=FiscalPeriodType.Q3,
+        period_end=datetime(2026, 9, 30),
+        has_qa_section=False,
+        source="ir_transcript_doc",
+    )
+    transcript_ingest._insert_segments(  # pyright: ignore[reportPrivateUsage]
+        conn,
+        transcript_id=old_tid,
+        turns=[SpeakerTurn(speaker="Speaker", text="turn") for _ in range(30)],
+    )
+    conn.commit()
+
+    gfb_body = _padded(
+        "=== SYNTHESIZED QUARTERLY UPDATE — Q&A SEGMENT ONLY ===\n"
+        "Source:    aggregator_google_finance_beta (https://www.google.com/finance)\n\n"
+        "Dara Khosrowshahi, CEO, Uber\n1m 00s\nPrepared remarks.\n"
+        "Brian Nowak, Analyst, Morgan Stanley\n20m 00s\nHow is autonomous supply scaling?\n"
+    )
+    gfb_path = tmp_path / "transcripts" / "raw" / "UBER_Q3_2026.txt"
+    gfb_path.parent.mkdir(parents=True)
+    gfb_path.write_text(gfb_body, encoding="utf-8")
+
+    result = transcript_ingest._ingest_one(  # pyright: ignore[reportPrivateUsage]
+        conn,
+        file_path=gfb_path,
+        project_root=tmp_path,
+        tracked_tickers=frozenset({"UBER"}),
+    )
+
+    assert result is not None
+    assert not result.skipped_existing
+    assert result.source == "aggregator_google_finance_beta"
+    assert result.qa_status is QASectionStatus.PRESENT
+    assert result.transcript_id != old_tid
+
+    old_row = conn.execute(
+        "SELECT is_current, is_active, superseded_by_transcript_id FROM transcripts WHERE id = ?",
+        (old_tid,),
+    ).fetchone()
+    assert tuple(old_row) == (0, 0, result.transcript_id)
+    new_row = conn.execute(
+        "SELECT is_current, is_active, has_qa_section, source FROM transcripts WHERE id = ?",
+        (result.transcript_id,),
+    ).fetchone()
+    assert tuple(new_row) == (1, 1, 1, "aggregator_google_finance_beta")
+
+    conflict_logs = [
+        json.loads(line) for line in capsys.readouterr().err.splitlines() if line.strip()
+    ]
+    assert len(conflict_logs) == 1
+    assert conflict_logs[0]["event"] == "transcript_period_conflict_supersede"
+    assert conflict_logs[0]["new_has_qa"] is True
+    assert conflict_logs[0]["old_has_qa"] is False
+
+
+def test_ingest_no_qa_ir_transcript_does_not_replace_qa_aggregator_roic(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import json
+
+    from compute import transcript_ingest
+
+    conn = _qa_first_ingest_conn()
+    roic_path = tmp_path / "transcripts" / "raw" / "META_Q4_2025.txt"
+    roic_path.parent.mkdir(parents=True)
+    roic_body = _padded(
+        "=== SYNTHESIZED QUARTERLY UPDATE — Q&A SEGMENT ONLY ===\n"
+        "Source:    aggregator_roic (https://roic.ai)\n\n"
+        "QUESTION AND ANSWER SECTION\n"
+        "Operator: First question is from Brian Nowak.\n"
+        "Mark Zuckerberg\nThanks Brian.\n"
+    )
+    roic_path.write_text(roic_body, encoding="utf-8")
+    first = transcript_ingest._ingest_one(  # pyright: ignore[reportPrivateUsage]
+        conn,
+        file_path=roic_path,
+        project_root=tmp_path,
+        tracked_tickers=frozenset({"META"}),
+    )
+    assert first is not None and not first.skipped_existing
+    assert first.transcript_id is not None
+
+    ir_file = tmp_path / "ir_documents" / "META" / "2025-12-31" / "ir_transcript.txt"
+    ir_file.parent.mkdir(parents=True)
+    ir_body = _padded(
+        "Mark Zuckerberg\nPrepared remarks only.\n"
+        "Susan Li\nCapex outlook for 2026.\n"
+        "Operator – we are now ready for questions.\n"  # noqa: RUF001
+    )
+    ir_bytes = ir_body.encode("utf-8")
+    ir_file.write_bytes(ir_bytes)
+    ir_doc_id = transcript_ingest._insert_document(  # pyright: ignore[reportPrivateUsage]
+        conn,
+        ticker="META",
+        file_path=ir_file,
+        sha256="2" * 64,
+        period_end=datetime(2025, 12, 31),
+        project_root=tmp_path,
+    )
+    conn.commit()
+
+    second = transcript_ingest._ingest_existing_ir_transcript(  # pyright: ignore[reportPrivateUsage]
+        conn,
+        document_id=ir_doc_id,
+        file_path=ir_file,
+        snapshot_bytes=ir_bytes,
+    )
+
+    assert second.skipped_existing is True
+    assert second.transcript_id == first.transcript_id
+    winner_row = conn.execute(
+        "SELECT id, source, has_qa_section FROM transcripts WHERE is_current = 1"
+    ).fetchone()
+    assert tuple(winner_row) == (first.transcript_id, "aggregator_roic", 1)
+    loser_row = conn.execute(
+        "SELECT source, has_qa_section, is_current, superseded_by_transcript_id "
+        "FROM transcripts WHERE document_id = ?",
+        (ir_doc_id,),
+    ).fetchone()
+    assert tuple(loser_row) == ("ir_transcript_doc", 0, 0, first.transcript_id)
+
+    conflict_logs = [
+        json.loads(line) for line in capsys.readouterr().err.splitlines() if line.strip()
+    ]
+    assert len(conflict_logs) == 1
+    assert conflict_logs[0]["event"] == "transcript_period_conflict_skip"
+    assert conflict_logs[0]["new_has_qa"] is False
+    assert conflict_logs[0]["old_has_qa"] is True

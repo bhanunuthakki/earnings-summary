@@ -1,4 +1,4 @@
-"""Reliability ranking for earnings-transcript sources.
+"""Reliability and Q&A-first ranking for earnings-transcript sources.
 
 `documents.source_quality_tier` (models/documents.py) already ranks source
 reliability for financial-statement data, but every transcript document maps
@@ -9,7 +9,19 @@ official transcript from a third-party aggregator's Q&A scrape. This module
 answers the transcript-specific question: when two ingested rows claim the
 same (ticker, fiscal_period_type, period_end), which one should win.
 
-Ranking is grounded in concrete evidence, not guesswork:
+Owner policy — Q&A availability outranks source reliability tier:
+  1. Confirmed analyst Q&A (`has_qa_section = True / 1`) ALWAYS beats
+     prepared-remarks-only (`False / 0`) or unknown (`None`) transcripts,
+     even when the non-Q&A row comes from a higher source tier (such as an
+     official prepared-remarks-only `ir_transcript_doc` or `manual_pdf`).
+     Absent (`False / 0`) and unknown (`None`) tie at rank 0 so source
+     reliability tier decides between them.
+  2. Source reliability tier (`reliability_rank`) decides whenever Q&A
+     availability ties.
+  3. Richer segment structure (`segment_count`) breaks ties within the same
+     Q&A rank and source reliability tier.
+
+Source-tier ranking is grounded in concrete evidence, not guesswork:
   - Nothing in the automated fetch paths (`fetch_qa_transcript.py`,
     `fetch_audio_transcripts.py`) ever writes a `.pdf` — both only write
     `.txt`. A `.pdf` found by `execution/ingest_transcripts.py`'s directory
@@ -35,7 +47,7 @@ Ranking is grounded in concrete evidence, not guesswork:
   - Every other aggregator source is Q&A-only by design (directives/
     fetch_qa_transcript.md, "Why Q&A only") — structurally less complete
     than a full-call transcript (manual/IR PDF, Google Finance Beta, Whisper
-    audio), regardless of parse fidelity.
+    audio) when both include Q&A, regardless of parse fidelity.
 """
 
 from __future__ import annotations
@@ -75,11 +87,39 @@ _RANK: dict[str, int] = {
 _DEFAULT_RANK = 0
 
 
+def qa_availability_rank(has_qa_section: bool | int | None) -> int:
+    """Return 1 when analyst Q&A is confirmed present, else 0.
+
+    Confirmed Q&A (`True` / `1`) strictly beats both absent (`False` / `0`)
+    and unknown (`None`), while absent and unknown tie so source reliability
+    tier decides between them.
+    """
+    return 1 if has_qa_section is True or has_qa_section == 1 else 0
+
+
 def reliability_rank(source: str | None) -> int:
     """Numeric rank for a source label; unrecognized/None sorts lowest."""
     if source is None:
         return _DEFAULT_RANK
     return _RANK.get(source, _DEFAULT_RANK)
+
+
+def transcript_winner_key(
+    *,
+    has_qa_section: bool | int | None,
+    source: str | None,
+    segment_count: int,
+) -> tuple[int, int, int]:
+    """Canonical sort key for selecting the winning transcript for a period.
+
+    Higher tuple wins: Q&A availability first, then source reliability tier,
+    then parsed speaker-turn segment count.
+    """
+    return (
+        qa_availability_rank(has_qa_section),
+        reliability_rank(source),
+        segment_count,
+    )
 
 
 def classify_transcript_source(
@@ -123,15 +163,21 @@ def choose_winner(
     new_segment_count: int,
     old_source: str | None,
     old_segment_count: int,
+    new_has_qa: bool | int | None = None,
+    old_has_qa: bool | int | None = None,
 ) -> bool:
     """True if the new row should replace the old one at a period conflict.
 
-    Reliability tier wins first; a tie falls back to richer segment
-    structure (more real speaker turns) as a corroborating signal, since two
-    fetches from the same tier can still differ in parse quality.
+    Q&A availability wins first; ties fall back to source reliability tier,
+    and same-tier ties fall back to richer segment structure (more real
+    speaker turns) as a corroborating signal.
     """
-    new_rank = reliability_rank(new_source)
-    old_rank = reliability_rank(old_source)
-    if new_rank != old_rank:
-        return new_rank > old_rank
-    return new_segment_count > old_segment_count
+    return transcript_winner_key(
+        has_qa_section=new_has_qa,
+        source=new_source,
+        segment_count=new_segment_count,
+    ) > transcript_winner_key(
+        has_qa_section=old_has_qa,
+        source=old_source,
+        segment_count=old_segment_count,
+    )
