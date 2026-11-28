@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 from compute import evidence_snapshot
 from compute.fiscal_calendar import (
@@ -471,17 +471,27 @@ def _has_selection_lifecycle(conn: sqlite3.Connection) -> bool:
     return {"is_active", "superseded_by_id"} <= columns
 
 
+class PeriodTranscriptMatch(NamedTuple):
+    """Current transcript metadata returned for a period-conflict check."""
+
+    document_id: int
+    transcript_id: int
+    source: str | None
+    segment_count: int
+    has_qa_section: bool | None
+
+
 def find_transcript_for_period(
     conn: sqlite3.Connection,
     *,
     ticker: str,
     fiscal_period_type: FiscalPeriodType,
     period_end: datetime,
-) -> tuple[int, int, str | None, int] | None:
+) -> PeriodTranscriptMatch | None:
     """Return the one current transcript for this real-world call, or ``None``."""
     transcripts = selected_transcripts_relation(conn).sql
     row = conn.execute(
-        f"SELECT id, document_id, source FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
+        f"SELECT id, document_id, source, has_qa_section FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE ticker = ? AND fiscal_period_type = ? AND period_end = ? LIMIT 1",
         (ticker, fiscal_period_type.value, _sqlite_datetime(period_end)),
     ).fetchone()
@@ -490,7 +500,15 @@ def find_transcript_for_period(
     seg_count = conn.execute(
         "SELECT COUNT(*) FROM transcript_segments WHERE transcript_id = ?", (row["id"],)
     ).fetchone()[0]
-    return (int(row["document_id"]), int(row["id"]), row["source"], int(seg_count))
+    raw_has_qa = row["has_qa_section"]
+    has_qa = None if raw_has_qa is None else bool(raw_has_qa)
+    return PeriodTranscriptMatch(
+        document_id=int(row["document_id"]),
+        transcript_id=int(row["id"]),
+        source=row["source"],
+        segment_count=int(seg_count),
+        has_qa_section=has_qa,
+    )
 
 
 def supersede_transcripts(
@@ -593,6 +611,7 @@ def _resolve_period_conflict(
     period_end: datetime,
     new_source: str,
     new_segment_count: int,
+    new_has_qa: bool | None = None,
 ) -> PeriodConflictDecision:
     """Choose the current version without mutating or discarding evidence."""
     conflict = find_transcript_for_period(
@@ -600,12 +619,14 @@ def _resolve_period_conflict(
     )
     if conflict is None:
         return PeriodConflictDecision(None, None, True)
-    old_document_id, old_transcript_id, old_source, old_segment_count = conflict
+    old_document_id, old_transcript_id, old_source, old_segment_count, old_has_qa = conflict
     replace = choose_winner(
         new_source=new_source,
         new_segment_count=new_segment_count,
         old_source=old_source,
         old_segment_count=old_segment_count,
+        new_has_qa=new_has_qa,
+        old_has_qa=old_has_qa,
     )
     sys.stderr.write(
         json.dumps(
@@ -619,8 +640,10 @@ def _resolve_period_conflict(
                 "fiscal_period_type": fiscal_period_type.value,
                 "period_end": period_end.isoformat(),
                 "new_source": new_source,
+                "new_has_qa": new_has_qa,
                 "new_segment_count": new_segment_count,
                 "old_source": old_source,
+                "old_has_qa": old_has_qa,
                 "old_segment_count": old_segment_count,
                 "old_document_id": old_document_id,
             }
@@ -894,6 +917,7 @@ def _ingest_one(
             period_end=period.period_end,
             new_source=source,
             new_segment_count=len(turns),
+            new_has_qa=qa_status_to_db_value(qa.status),
         )
         transcript_id = _insert_transcript(
             conn,
@@ -948,6 +972,7 @@ def _ingest_one(
         period_end=period.period_end,
         new_source=source,
         new_segment_count=len(turns),
+        new_has_qa=qa_status_to_db_value(qa.status),
     )
     if not decision.new_becomes_current:
         # Preserve the lower-ranked fetch as a historical evidence version.
@@ -1170,6 +1195,7 @@ def _ingest_existing_ir_transcript(
         period_end=period_end,
         new_source=source,
         new_segment_count=len(turns),
+        new_has_qa=qa_status_to_db_value(qa.status),
     )
     if not decision.new_becomes_current:
         winner_document_id = decision.current_document_id

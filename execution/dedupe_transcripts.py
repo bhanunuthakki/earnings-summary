@@ -24,7 +24,8 @@ compare against on every future run instead of NULL.
 
 For every (ticker, fiscal_period_type, period_end) group with more than one
 row: classify each row's source (src/transcripts/source_reliability.py),
-keep the highest-ranked (richer segment count, then more recent fetch, then
+keep the highest-ranked (confirmed Q&A availability first, then source
+reliability tier, then richer segment count, then more recent fetch, then
 lowest id as a final deterministic tiebreak), supersede the rest while
 retaining their transcript, document, and segment evidence. Every row
 with a NULL `source` (duplicate or not) gets backfilled by the same
@@ -58,7 +59,7 @@ from pipeline.queries import open_db  # noqa: E402
 from transcripts.source_reliability import (  # noqa: E402
     UNKNOWN_LEGACY,
     classify_transcript_source,
-    reliability_rank,
+    transcript_winner_key,
 )
 
 _MANIFEST_DIR = PROJECT_ROOT / ".tmp" / "dedupe_transcripts"
@@ -70,6 +71,7 @@ class SupersededRow:
     document_id: int
     file_path: str
     source: str
+    has_qa_section: bool | None
     segment_count: int
     broken_file: bool
 
@@ -81,6 +83,7 @@ class GroupReport:
     period_end: str | None
     kept_transcript_id: int
     kept_source: str
+    kept_has_qa_section: bool | None
     kept_segment_count: int
     superseded: list[SupersededRow]
 
@@ -115,7 +118,7 @@ def _sweep(
     """Returns (duplicate_group_reports, backfill_map[transcript_id]=source, solo_count)."""
     sql = (
         "SELECT t.id AS transcript_id, t.document_id, t.ticker, t.fiscal_period_type, "
-        "       t.period_end, t.source AS stored_source, "
+        "       t.period_end, t.source AS stored_source, t.has_qa_section, "
         "       d.file_path, d.doc_type, d.fetched_at "
         "FROM transcripts t JOIN documents d ON d.id = t.document_id"
     )
@@ -151,11 +154,16 @@ def _sweep(
             solo_count += 1
             continue
 
-        def _sort_key(item: tuple[sqlite3.Row, str, int, bool]) -> tuple[int, int, str, int]:
+        def _sort_key(
+            item: tuple[sqlite3.Row, str, int, bool],
+        ) -> tuple[int, int, int, str, int]:
             row, source, seg_count, _broken = item
             return (
-                reliability_rank(source),
-                seg_count,
+                *transcript_winner_key(
+                    has_qa_section=row["has_qa_section"],
+                    source=source,
+                    segment_count=seg_count,
+                ),
                 str(row["fetched_at"] or ""),
                 -int(row["transcript_id"]),
             )
@@ -164,6 +172,10 @@ def _sweep(
         winner_row, winner_source, winner_seg_count, _ = classified[0]
         losers = classified[1:]
 
+        def _row_has_qa(row: sqlite3.Row) -> bool | None:
+            raw = row["has_qa_section"]
+            return None if raw is None else bool(raw)
+
         group_reports.append(
             GroupReport(
                 ticker=ticker_key,
@@ -171,6 +183,7 @@ def _sweep(
                 period_end=period_end,
                 kept_transcript_id=int(winner_row["transcript_id"]),
                 kept_source=winner_source,
+                kept_has_qa_section=_row_has_qa(winner_row),
                 kept_segment_count=winner_seg_count,
                 superseded=[
                     SupersededRow(
@@ -178,6 +191,7 @@ def _sweep(
                         document_id=int(row["document_id"]),
                         file_path=str(row["file_path"]),
                         source=source,
+                        has_qa_section=_row_has_qa(row),
                         segment_count=seg_count,
                         broken_file=broken,
                     )
@@ -213,6 +227,7 @@ def main() -> int:
                         "period_end": g.period_end,
                         "kept_transcript_id": g.kept_transcript_id,
                         "kept_source": g.kept_source,
+                        "kept_has_qa_section": g.kept_has_qa_section,
                         "superseded_count": len(g.superseded),
                     }
                 )

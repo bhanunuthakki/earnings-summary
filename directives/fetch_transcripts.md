@@ -80,11 +80,12 @@ Entries with `url: null` are skipped with the `gap_reason` printed — they are 
 
 ## Q&A Section Detection
 
-Every transcribed file is inspected for analyst Q&A content immediately after Whisper finishes. Detection is structural — three regex signals against established transcript conventions:
+Every transcribed or ingested file is inspected for analyst Q&A content (`detect_qa_section` in `src/compute/transcript_ingest.py`). Detection is structural — four regex signals against established transcript conventions:
 
 1. CallStreet/FactSet `QUESTION AND ANSWER SECTION` header.
 2. CallStreet `<Q – ...>` analyst-question speaker tag.
 3. ≥2 operator analyst-introduction phrases (`next question is from X`, `first question comes from Y`).
+4. Standalone analyst speaker header lines (`<Name>, ...Analyst..., <Firm>`), as produced by Google Finance Beta / Quartr transcripts.
 
 Outcomes:
 
@@ -94,7 +95,15 @@ Outcomes:
 | `false` | Prepared remarks only | Fetcher prints `WARN missing_qa: ...` to stderr and the batch summary lists the affected (ticker, quarter). Either re-pull from a longer YouTube source or ask the user to drop a full-call PDF into `transcripts/raw/`. |
 | `null` | Text too short to determine (<2 KB) | Treat as broken file; investigate. |
 
-The same verdict is also persisted on `transcripts.has_qa_section` during ingest (see migration `0019_transcripts_has_qa_section`), so downstream extractors (Say-Do, commitments) can filter to `has_qa_section = 1` rows when analyst-question content is required.
+The same verdict is persisted on `transcripts.has_qa_section` during ingest (see migration `0019_transcripts_has_qa_section`), so downstream extractors (Say-Do, commitments) can filter to `has_qa_section = 1` rows when analyst-question content is required.
+
+### Period Winner Ranking Policy
+
+When multiple transcripts exist for the same `(ticker, fiscal_period_type, period_end)`, period-conflict resolution (`src/transcripts/source_reliability.py`, `src/compute/transcript_ingest.py`, and `execution/dedupe_transcripts.py`) always prioritizes confirmed Q&A availability (`has_qa_section = 1`) over source reliability tier:
+
+1. **Q&A availability** (`qa_availability_rank`): confirmed Q&A (`True` / `1`) beats both absent (`False` / `0`) and unknown (`None`), which tie at rank `0`.
+2. **Source reliability tier** (`reliability_rank`): breaks ties whenever Q&A availability matches.
+3. **Parsed segment count**: breaks ties within the same Q&A rank and source reliability tier.
 
 ## Edge Cases & Known Constraints
 
