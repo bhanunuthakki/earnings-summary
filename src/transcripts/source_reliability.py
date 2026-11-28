@@ -165,19 +165,26 @@ def choose_winner(
     old_segment_count: int,
     new_has_qa: bool | int | None = None,
     old_has_qa: bool | int | None = None,
+    new_is_receipted_ir_doc: bool = False,
+    old_is_receipted_ir_doc: bool = True,
 ) -> bool:
     """True if the new row should replace the old one at a period conflict.
 
     Q&A availability wins first; ties fall back to source reliability tier,
-    and same-tier ties fall back to richer segment structure (more real
-    speaker turns) as a corroborating signal.
+    then richer segment structure (more real speaker turns), and finally a
+    receipted ``ir_doc`` supersedes an unreceipted legacy transcript on an
+    exact tie.
     """
-    return transcript_winner_key(
+    new_key = transcript_winner_key(
         has_qa_section=new_has_qa,
         source=new_source,
         segment_count=new_segment_count,
-    ) > transcript_winner_key(
+    )
+    old_key = transcript_winner_key(
         has_qa_section=old_has_qa,
         source=old_source,
         segment_count=old_segment_count,
     )
+    if new_key != old_key:
+        return new_key > old_key
+    return new_is_receipted_ir_doc and not old_is_receipted_ir_doc

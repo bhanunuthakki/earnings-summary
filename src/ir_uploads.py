@@ -797,7 +797,7 @@ _FILENAME_DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
     (
         DocType.IR_SUPPLEMENT,
         re.compile(
-            r"(?:financial[-_]workbook|financial[-_]supplement|fact[-_]sheet)",
+            r"(?:financial[-_]workbook|financial[-_]supplement|supplemental[-_]data|fact[-_]sheet)",
             re.IGNORECASE,
         ),
         "filename_supplement",
