@@ -25,8 +25,12 @@ from report.models import (
     ValuationSnapshot,
 )
 from report.renderers.numfmt import fmt_date, fmt_reltime
-from report.renderers.workspace_charts import SparklineSize, sparkline
-from report.renderers.workspace_data import format_ledger_value, kpi_is_stale, kpi_trend_delta
+from report.renderers.workspace_charts import SparklineSize, segmented_sparkline, sparkline
+from report.renderers.workspace_data import (
+    format_ledger_value,
+    kpi_comparable_trend_delta,
+    kpi_is_stale,
+)
 from report.renderers.workspace_dcf import (
     dcf_inject_button,
     dcf_inject_for_kpi,
@@ -469,12 +473,33 @@ def _kpi_ledger_row(
     else:
         latest_html = '<span class="muted">—</span>'
 
-    # Trend cell — sparkline + YoY/QoQ delta. Needs ≥2 real observations.
+    # Trend cell — sparkline + YoY/QoQ delta. Needs ≥2 real observations
+    # (or explicit comparability breaks to surface).
     values = [v for _, v in r.history if v is not None]
-    if len(values) >= 2:
-        spark = sparkline(values, size=SparklineSize.MICRO)
-        label, sign = kpi_trend_delta(r.history, r.unit, r.name)
-        delta_html = f' <span class="ledger-delta {sign}">{_esc(label)}</span>' if label else ""
+    has_breaks = bool(r.breaks) or len(r.segments) > 1
+    if len(values) >= 2 or (len(values) == 1 and has_breaks):
+        if has_breaks and r.segments:
+            seg_values = [[v for _, v in seg.points] for seg in r.segments if seg.points]
+            spark = segmented_sparkline(
+                seg_values,
+                size=SparklineSize.MICRO,
+                break_labels=[b.label for b in r.breaks],
+            )
+        else:
+            spark = sparkline(values, size=SparklineSize.MICRO)
+        label, sign, delta_tip = kpi_comparable_trend_delta(r)
+        if label:
+            tip_attr = f' title="{_esc(delta_tip)}"' if delta_tip else ""
+            if sign == "warn":
+                delta_html = (
+                    f' <span class="k-chip k-chip-warn k-chip-mono" '
+                    f'data-yoy-status="{_esc(r.comparable_yoy_status or "not_comparable")}"'
+                    f"{tip_attr}>{_esc(label)}</span>"
+                )
+            else:
+                delta_html = f' <span class="ledger-delta {sign}"{tip_attr}>{_esc(label)}</span>'
+        else:
+            delta_html = ""
         trend_html = f'<span class="ledger-spark">{spark}</span>{delta_html}'
     elif len(values) == 1:
         trend_html = '<span class="muted xsmall">single obs</span>'
@@ -495,6 +520,14 @@ def _kpi_ledger_row(
         if fact_ref
         else f"<strong>{clean_name}</strong>"
     )
+    if r.breaks:
+        has_unbridged = any(b.disposition == "not_comparable" for b in r.breaks)
+        chip_text = "break" if has_unbridged else "bridged"
+        break_tip = "; ".join(f"{b.period_end}: {b.label}" for b in r.breaks)
+        name_html += (
+            f' <span class="k-chip k-chip-warn k-chip-mono" data-kpi-break="true" '
+            f'title="{_esc(break_tip)}">{chip_text}</span>'
+        )
     if r.definition:
         name_html += f'<div class="ledger-def muted xsmall">{_esc(r.definition)}</div>'
 

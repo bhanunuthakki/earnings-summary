@@ -43,6 +43,11 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from compute.kpi_resolver import (
+    KpiChartSeries,
+    KpiComparableYoYResult,
+    resolve_kpi_chart_series,
+    resolve_kpi_comparable_yoy,
+    resolve_kpi_definition_name,
     semantic_series_identity_anchor_sql,
     semantic_series_identity_flat_sql,
     semantic_series_identity_sql,
@@ -66,6 +71,11 @@ from models.documents import (
 )
 from models.documents import (
     tier_rank_case_sql as tier_rank_case_sql,
+)
+from models.facts import FiscalPeriodType
+from pipeline.kpi_comparability_bridges import (
+    KpiPeriodCadenceKind,
+    classify_period_cadence,
 )
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.fact_read_model import FactReadModel
@@ -1630,6 +1640,154 @@ def load_kpi_series(
         return []
     finally:
         conn.close()
+
+
+def _cadence_kind_for_period_types(
+    period_types: Iterable[str] | None,
+) -> KpiPeriodCadenceKind | None:
+    if period_types is None:
+        return None
+    buckets = {classify_period_cadence(pt) for pt in period_types}
+    buckets.discard(KpiPeriodCadenceKind.UNKNOWN)
+    if len(buckets) == 1:
+        return next(iter(buckets))
+    return None
+
+
+def _resolve_kpi_definition_id(
+    conn: sqlite3.Connection,
+    ticker: str,
+    kpi_name: str,
+    *,
+    period_types: Iterable[str] | None = None,
+) -> int | None:
+    if not _has_table(conn, "kpi_definitions"):
+        return None
+    pt_tuple = tuple(period_types) if period_types is not None else None
+    resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name, period_types=pt_tuple)
+    lookup_name = resolved_name or kpi_name
+    row = conn.execute(
+        "SELECT id FROM kpi_definitions WHERE UPPER(ticker) = ? AND name = ? ORDER BY id ASC LIMIT 1",
+        (ticker.upper(), lookup_name),
+    ).fetchone()
+    if row is None:
+        return None
+    return int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def load_kpi_chart_series(
+    ticker: str,
+    kpi_name: str,
+    repo_root: Path | None = None,
+    *,
+    db_path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
+    kpi_definition_id: int | None = None,
+    period_types: Iterable[str] | None = DEFAULT_PERIOD_TYPES,
+    effective_at: datetime | None = None,
+    known_at: datetime | None = None,
+    apply_split_adjustment: bool = False,
+    apply_composite_bridge: bool = False,
+    include_comparators: bool = True,
+) -> KpiChartSeries | None:
+    """Load a comparability-aware, segmented KPI chart series via ``resolve_kpi_chart_series``.
+
+    Reuses a caller-owned ``conn`` when supplied. Best-effort: returns ``None``
+    when the DB is missing or no KPI definition matches.
+    """
+    with _borrowed_connection(repo_root, db_path, conn) as borrowed:
+        if borrowed is None:
+            return None
+        try:
+            def_id = (
+                kpi_definition_id
+                if kpi_definition_id is not None
+                else _resolve_kpi_definition_id(
+                    borrowed, ticker, kpi_name, period_types=period_types
+                )
+            )
+            if def_id is None:
+                return None
+            now = datetime.now(UTC)
+            eff = _utc(effective_at) if effective_at is not None else now
+            known = _utc(known_at) if known_at is not None else now
+            cadence = _cadence_kind_for_period_types(period_types)
+            return resolve_kpi_chart_series(
+                borrowed,
+                kpi_definition_id=def_id,
+                effective_at=eff,
+                known_at=known,
+                cadence_kind=cadence,
+                apply_split_adjustment=apply_split_adjustment,
+                apply_composite_bridge=apply_composite_bridge,
+                include_comparators=include_comparators,
+            )
+        except (sqlite3.Error, ValueError) as exc:
+            log.warning(
+                {
+                    "event": "timeseries_load_kpi_chart_series_failed",
+                    "ticker": ticker,
+                    "kpi": kpi_name,
+                    "error": str(exc),
+                }
+            )
+            return None
+
+
+def load_kpi_comparable_yoy(
+    ticker: str,
+    kpi_name: str,
+    period_end: date | datetime | str,
+    repo_root: Path | None = None,
+    *,
+    db_path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
+    kpi_definition_id: int | None = None,
+    fiscal_period_type: FiscalPeriodType | str | None = None,
+    prior_period_end: date | datetime | str | None = None,
+    prior_fiscal_period_type: FiscalPeriodType | str | None = None,
+    effective_at: datetime | None = None,
+    known_at: datetime | None = None,
+) -> KpiComparableYoYResult | None:
+    """Resolve comparable YoY for ``ticker.kpi_name`` via ``resolve_kpi_comparable_yoy``.
+
+    Fails closed across unbridged definition breaks instead of computing a naive
+    delta across incompatible revisions. Reuses ``conn`` when supplied.
+    """
+    with _borrowed_connection(repo_root, db_path, conn) as borrowed:
+        if borrowed is None:
+            return None
+        try:
+            def_id = (
+                kpi_definition_id
+                if kpi_definition_id is not None
+                else _resolve_kpi_definition_id(borrowed, ticker, kpi_name, period_types=None)
+            )
+            if def_id is None:
+                return None
+            now = datetime.now(UTC)
+            eff = _utc(effective_at) if effective_at is not None else now
+            known = _utc(known_at) if known_at is not None else now
+            return resolve_kpi_comparable_yoy(
+                borrowed,
+                kpi_definition_id=def_id,
+                period_end=period_end,
+                effective_at=eff,
+                known_at=known,
+                fiscal_period_type=fiscal_period_type,
+                prior_period_end=prior_period_end,
+                prior_fiscal_period_type=prior_fiscal_period_type,
+            )
+        except (sqlite3.Error, ValueError) as exc:
+            log.warning(
+                {
+                    "event": "timeseries_load_kpi_comparable_yoy_failed",
+                    "ticker": ticker,
+                    "kpi": kpi_name,
+                    "error": str(exc),
+                }
+            )
+            return None
 
 
 def load_segment_junction_series(

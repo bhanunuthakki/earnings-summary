@@ -22,6 +22,8 @@ from __future__ import annotations
 from timeseries.loaders import (
     load_financial_fact_provenance,
     load_financial_series,
+    load_kpi_chart_series,
+    load_kpi_comparable_yoy,
     load_kpi_series,
     load_segment_series,
 )
@@ -44,6 +46,8 @@ __all__ = [
     "detect_trend",
     "load_financial_fact_provenance",
     "load_financial_series",
+    "load_kpi_chart_series",
+    "load_kpi_comparable_yoy",
     "load_kpi_series",
     "load_segment_series",
     "rolling_zscore_anomalies",

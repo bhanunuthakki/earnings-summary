@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import html
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import Protocol
 
 from report.renderers.workspace_charts import CHARTS_V2_CSS
 from report.sections._common import level_cagr
@@ -395,6 +397,217 @@ def multi_line_chart(
     return "".join(parts)
 
 
+class _SegmentedPointProto(Protocol):
+    @property
+    def period_end(self) -> str: ...
+    @property
+    def value(self) -> object: ...
+
+
+class _SegmentedSegmentProto(Protocol):
+    @property
+    def segment_index(self) -> int: ...
+    @property
+    def reported_label(self) -> str: ...
+    @property
+    def is_transformed(self) -> bool: ...
+    @property
+    def bridge_kind(self) -> str | None: ...
+    @property
+    def points(self) -> Sequence[_SegmentedPointProto]: ...
+
+
+class _SegmentedBreakProto(Protocol):
+    @property
+    def period_end(self) -> str: ...
+    @property
+    def relation_kind(self) -> object: ...
+    @property
+    def disposition(self) -> object: ...
+    @property
+    def bridge_kind(self) -> str | None: ...
+    @property
+    def label(self) -> str: ...
+
+
+class _SegmentedSeriesProto(Protocol):
+    @property
+    def segments(self) -> Sequence[_SegmentedSegmentProto]: ...
+    @property
+    def breaks(self) -> Sequence[_SegmentedBreakProto]: ...
+
+
+def segmented_kpi_chart(
+    series: _SegmentedSeriesProto,
+    *,
+    title: str,
+    width: int = 560,
+    height: int = 240,
+    value_fmt: str = "compact",
+    label_points: bool = False,
+) -> str:
+    """Render a comparability-aware segmented KPI chart from ``KpiChartSeries``.
+
+    Each contiguous ``KpiChartSegment`` renders as its own disconnected SVG
+    ``<path class="cv2-line" data-segment-index="...">`` (never drawing a silent
+    continuous line across a comparability break). Transformed/bridged segments
+    render dashed; every ``KpiChartBreak`` renders a vertical dashed break rule
+    with typed ``data-break-*`` attributes and an accessible ``<title>``.
+    """
+    pad_left, pad_right, pad_top, pad_bottom = 50, 62, 34, 38
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
+
+    all_periods = sorted(
+        {
+            *(pt.period_end for seg in series.segments for pt in seg.points),
+            *(b.period_end for b in series.breaks),
+        }
+    )
+    all_vals = [float(str(pt.value)) for seg in series.segments for pt in seg.points]
+    if not all_periods or not all_vals:
+        return _empty_chart(title, width, height)
+
+    period_index = {p: idx for idx, p in enumerate(all_periods)}
+    n = len(all_periods)
+    vmin, vmax = min(all_vals), max(all_vals)
+    if value_fmt == "pct" and 0 < vmin < 5:
+        vmin = 0.0
+    if vmin == vmax:
+        vmax = vmin + 1.0
+    rng = vmax - vmin
+
+    def fmt(v: float) -> str:
+        if value_fmt == "pct":
+            return fmt_pct(v)
+        if value_fmt == "dollar":
+            return fmt_dollar(v)
+        return fmt_compact(v)
+
+    def x_at(idx: float) -> float:
+        return pad_left + (idx / (n - 1)) * plot_w if n > 1 else pad_left + plot_w / 2
+
+    def y_at(v: float) -> float:
+        return pad_top + ((vmax - v) / rng) * plot_h
+
+    parts = [
+        f'<svg class="cv2-chart" width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'role="img" aria-label="{html.escape(title)}" data-segmented-kpi-chart="true">',
+        f"<title>{html.escape(title)}</title>"
+        f"<desc>Segmented KPI chart, {len(series.segments)} segments, "
+        f"{len(series.breaks)} breaks, {n} periods.</desc>",
+        f'<text x="{pad_left}" y="14" class="cv2-title">{html.escape(title)}</text>',
+    ]
+
+    for y_val in (vmax, (vmin + vmax) / 2, vmin):
+        y = y_at(y_val)
+        parts.append(
+            f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" '
+            f'class="cv2-grid"/>'
+        )
+        parts.append(
+            f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">'
+            f"{fmt(y_val)}</text>"
+        )
+
+    step = max(1, n // 7)
+    for i in range(0, n, step):
+        parts.append(
+            f'<text x="{x_at(i):.1f}" y="{height - 12}" class="cv2-axis" text-anchor="middle">'
+            f"{html.escape(all_periods[i][:7])}</text>"
+        )
+
+    for brk in series.breaks:
+        b_idx = period_index.get(brk.period_end)
+        if b_idx is None:
+            continue
+        bx = x_at(b_idx)
+        disp = str(getattr(brk.disposition, "value", brk.disposition))
+        rel = str(getattr(brk.relation_kind, "value", brk.relation_kind))
+        b_kind = brk.bridge_kind or ""
+        parts.append(
+            f'<line x1="{bx:.1f}" y1="{pad_top}" x2="{bx:.1f}" y2="{pad_top + plot_h}" '
+            f'class="cv2-grid-zero" data-kpi-break="true" '
+            f'data-break-period="{html.escape(brk.period_end)}" '
+            f'data-break-relation="{html.escape(rel)}" '
+            f'data-break-disposition="{html.escape(disp)}" '
+            f'data-break-kind="{html.escape(b_kind)}">'
+            f"<title>{html.escape(brk.label)}</title></line>"
+        )
+        short_tag = "break" if disp == "not_comparable" else (b_kind or rel)
+        parts.append(
+            f'<text x="{bx + 3:.1f}" y="{pad_top + 10}" class="cv2-axis" '
+            f'data-kpi-break-label="true">{html.escape(short_tag)}</text>'
+        )
+
+    for seg_i, seg in enumerate(series.segments):
+        color = PALETTE[seg_i % len(PALETTE)]
+        pts: list[tuple[float, float, float]] = []
+        for pt in seg.points:
+            p_idx = period_index.get(pt.period_end)
+            if p_idx is None:
+                continue
+            val = float(str(pt.value))
+            pts.append((x_at(p_idx), y_at(val), val))
+        if len(pts) >= 2:
+            path = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y, _ in pts)
+            dash = ' stroke-dasharray="6 4"' if seg.is_transformed else ""
+            parts.append(
+                f'<path d="{path}" fill="none" stroke="currentColor" '
+                f'stroke-width="var(--bw-thin)"{dash} class="cv2-line" '
+                f'data-segment-index="{seg.segment_index}" '
+                f'data-segment-transformed="{"true" if seg.is_transformed else "false"}" '
+                f'style="color:{color}"/>'
+            )
+        for pt_idx, (x, y, val) in enumerate(pts):
+            parts.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="currentColor" '
+                f'class="cv2-point" data-segment-index="{seg.segment_index}" '
+                f'style="color:{color}"/>'
+            )
+            if label_points and pt_idx < len(pts) - 1:
+                label_y = y - 7 if seg_i % 2 == 0 else y + 13
+                parts.append(
+                    f'<text x="{x:.1f}" y="{label_y:.1f}" class="cv2-axis" '
+                    f'text-anchor="middle">{fmt(val)}</text>'
+                )
+        if pts:
+            lx, ly, last_v = pts[-1]
+            parts.append(
+                f'<text x="{lx + 4:.1f}" y="{ly + 3:.1f}" class="cv2-line-end" '
+                f'style="color:{color}">{fmt(last_v)}</text>'
+            )
+
+    leg_x = float(pad_left + 8)
+    leg_y = float(pad_top + 2)
+    for seg_i, seg in enumerate(series.segments):
+        color = PALETTE[seg_i % len(PALETTE)]
+        leg_name = (
+            f"{seg.reported_label} ({seg.bridge_kind or 'adjusted'})"
+            if seg.is_transformed
+            else seg.reported_label
+        )
+        if seg.is_transformed:
+            parts.append(
+                f'<line x1="{leg_x:.1f}" y1="{leg_y + 5:.1f}" '
+                f'x2="{leg_x + 10:.1f}" y2="{leg_y + 5:.1f}" stroke="currentColor" '
+                f'stroke-dasharray="3 2" class="cv2-legend-swatch" style="color:{color}"/>'
+            )
+        else:
+            parts.append(
+                f'<rect x="{leg_x:.1f}" y="{leg_y:.1f}" width="10" height="10" '
+                f'fill="currentColor" class="cv2-legend-swatch" style="color:{color}"/>'
+            )
+        parts.append(
+            f'<text x="{leg_x + 14:.1f}" y="{leg_y + 9:.1f}" class="cv2-legend">'
+            f"{html.escape(leg_name)}</text>"
+        )
+        leg_x += 14 + len(leg_name) * 6.2 + 12
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 # ----- Paired chart: level bars + YoY% bars side-by-side -----
 
 
@@ -669,6 +882,13 @@ class MatrixRow:
     comparison_eligible_edges: list[bool] | None = None
     # None preserves legacy callers; supplied but incomplete dates fail closed.
     comparison_period_ends: list[date | None] | None = None
+    # Explicit per-period YoY% overrides from resolve_kpi_comparable_yoy (in pct
+    # units, e.g. 10.0 for +10.0%; None for uncomparable/missing). When provided,
+    # takes precedence over naive (curr / base - 1) so bridged YoY values surface
+    # accurately and unbridged breaks fail closed as None.
+    yoy_overrides: list[float | None] | None = None
+    # Optional mapping of full-axis period index -> comparability break label.
+    break_indices: dict[int, str] | None = None
 
     def comparison_available(self, start: int, end: int, periods_per_year: int = 4) -> bool:
         edges = self.comparison_eligible_edges
@@ -781,17 +1001,28 @@ def yoy_heatmap_table(
             j_full = start_display + j_display
             curr = row.levels[j_full]
             base = row.levels[j_full - period_stride] if j_full >= period_stride else None
-            pct = (
-                yoy(curr, base)
-                if j_full >= period_stride
-                and row.comparison_available(j_full - period_stride, j_full, periods_per_year)
-                else None
-            )
+            if row.yoy_overrides is not None and len(row.yoy_overrides) == len(row.levels):
+                pct = row.yoy_overrides[j_full]
+            else:
+                pct = (
+                    yoy(curr, base)
+                    if j_full >= period_stride
+                    and row.comparison_available(j_full - period_stride, j_full, periods_per_year)
+                    else None
+                )
             cell_title = ""
             if row.cell_titles is not None and j_full < len(row.cell_titles):
                 t = row.cell_titles[j_full]
                 if t:
                     cell_title = f' title="{html.escape(t)}"'
+            break_attr = ""
+            break_mark = ""
+            if row.break_indices is not None and j_full in row.break_indices:
+                b_lbl = row.break_indices[j_full]
+                break_attr = ' data-kpi-break="true"'
+                break_mark = (
+                    f' <span class="cv2-matrix-def-mark" title="{html.escape(b_lbl)}">‖</span>'
+                )
             suffix = (
                 row.cell_suffix_html[j_full]
                 if row.cell_suffix_html is not None
@@ -804,14 +1035,17 @@ def yoy_heatmap_table(
                 # YoY direction of that level (YoY% of a ratio isn't meaningful).
                 bg = heat_color(pct)
                 tb.append(
-                    f'<td class="cv2-matrix-cell" style="{bg}"{cell_title}>'
-                    f"{_fmt_level(curr, row.unit)}</td>"
+                    f'<td class="cv2-matrix-cell" style="{bg}"{cell_title}{break_attr}>'
+                    f"{_fmt_level(curr, row.unit)}{break_mark}</td>"
                 )
                 continue
             noisy = is_noisy(pct, base, latest_val)
             cls = "cv2-matrix-cell cv2-matrix-noisy" if noisy else "cv2-matrix-cell"
             bg = "" if noisy else heat_color(pct)
-            tb.append(f'<td class="{cls}" style="{bg}"{cell_title}>{fmt_pct(pct, 1)}{suffix}</td>')
+            tb.append(
+                f'<td class="{cls}" style="{bg}"{cell_title}{break_attr}>'
+                f"{fmt_pct(pct, 1)}{break_mark}{suffix}</td>"
+            )
         # Trailing columns: CAGR for flows; absolute pp/bps change for ratios.
         for q in cagr_periods:
             base = row.levels[-1 - q] if n_total > q else None

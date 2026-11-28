@@ -13,10 +13,12 @@ directly into kpi_facts.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -29,9 +31,15 @@ from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
 from pipeline.confidence import score_confidence
 from pipeline.kpi_atomic_admission import build_atomic_semantic_context
+from pipeline.kpi_comparability_bridges import (
+    OverlapTolerancePolicy,
+    SplitScaleAppliesTo,
+)
+from pipeline.kpi_definition_revisions import ComparativeOverlapCandidate
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
+    KpiPeriodRole,
     KpiPublicationLane,
     KpiSemanticContext,
     KpiSemanticStatus,
@@ -44,6 +52,7 @@ from pipeline.kpi_semantics import (
     unclassified_kpi_context,
 )
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+from runtime.deterministic import table_or_view_exists as _table_exists
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +81,64 @@ def normalize_source_excerpt(source_excerpt: str | None) -> str | None:
         return None
     normalized = source_excerpt.strip()[:_SOURCE_EXCERPT_MAX]
     return normalized or None
+
+
+class SplitScaleBridgeIntent(BaseModel):
+    """Explicit stock-split / share-count rescale bridge intent attached to a KPI value."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scale_numerator: int = Field(gt=0)
+    scale_denominator: int = Field(default=1, gt=0)
+    applies_to: SplitScaleAppliesTo
+    effective_date: str = Field(min_length=10, max_length=10)
+    comparative_overlap: ComparativeOverlapCandidate
+    predecessor_definition_revision_id: str | None = Field(
+        default=None, min_length=1, max_length=128
+    )
+
+
+class RecastBridgeIntent(BaseModel):
+    """Explicit continuing-ops / scope-change recast bridge intent attached to a KPI value."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    recast_reason: str = Field(min_length=1, max_length=256)
+    scope_change_summary: str = Field(min_length=1, max_length=1024)
+    comparative_periods_present: tuple[str, ...] = ()
+    predecessor_definition_revision_id: str | None = Field(
+        default=None, min_length=1, max_length=128
+    )
+
+
+class KpiComparativeValue(BaseModel):
+    """Comparative prior-period KPI observation extracted from the same IR document/table."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=200)
+    period_end: datetime
+    fiscal_period_type: FiscalPeriodType
+    value: Decimal
+    unit: Unit
+    currency: Currency | None = None
+    confidence: float = Field(ge=0.0, le=1.0, default=0.95)
+    source_excerpt: str | None = None
+    source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
+    locator: FactLocator | LegacyEscapeHatch
+    metric_name_as_reported: str | None = Field(default=None, max_length=256)
+    source_row_label: str | None = Field(default=None, max_length=512)
+    source_column_header: str | None = Field(default=None, max_length=512)
+    predecessor_value: Decimal | None = None
+
+    @model_validator(mode="after")
+    def _monetary_currency_required(self) -> KpiComparativeValue:
+        if (
+            self.unit in {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
+            and self.currency is None
+        ):
+            raise ValueError("monetary comparative KPI values require currency")
+        return self
 
 
 class KpiValue(BaseModel):
@@ -111,6 +178,11 @@ class KpiValue(BaseModel):
     source_row_label: str | None = Field(default=None, max_length=512)
     source_column_header: str | None = Field(default=None, max_length=512)
     source_precision: KpiSourcePrecision | None = None
+    # Optional comparative overlap witness candidate and typed bridge intents
+    # forwarded to bind_forward_kpi_definition_revision / admit_*_bridge.
+    comparative_overlap: ComparativeOverlapCandidate | None = None
+    split_scale_bridge: SplitScaleBridgeIntent | None = None
+    recast_bridge: RecastBridgeIntent | None = None
 
     @model_validator(mode="after")
     def _monetary_currency_required(self) -> KpiValue:
@@ -183,6 +255,9 @@ class KpiExtractionManifest(BaseModel):
     auto_admit: bool = False
     reviewed_by: str = Field(default="pipeline:atomic_ingest", min_length=1, max_length=128)
     metric_natures: dict[str, KpiMetricNature] = Field(default_factory=dict)
+    comparative_overlaps: dict[str, ComparativeOverlapCandidate] = {}
+    comparative_values: list[KpiComparativeValue] = []
+    overlap_policy: OverlapTolerancePolicy | None = None
     values: list[KpiValue]
 
 
@@ -850,6 +925,18 @@ def persist_kpi_value_at_exact_definition(
     )
 
 
+def _locator_dict_from_json(locator_json: str | None) -> dict[str, object] | None:
+    if not locator_json:
+        return None
+    try:
+        parsed: object = json.loads(locator_json)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict) and parsed:
+        return {str(k): v for k, v in cast("dict[object, object]", parsed).items()}
+    return None
+
+
 def persist_manifest(
     conn: sqlite3.Connection,
     *,
@@ -862,7 +949,15 @@ def persist_manifest(
     # Local import: pipeline.locators imports record_validation_issue FROM
     # this module, so a module-level `from pipeline import locators` here
     # would be circular. By call time both modules are fully loaded.
-    from pipeline.kpi_definition_revisions import bind_forward_kpi_definition_revision
+    from pipeline.kpi_comparability_admission import (
+        admit_recast_comparative_bridge,
+        admit_split_scale_bridge,
+    )
+    from pipeline.kpi_definition_revisions import (
+        bind_forward_kpi_definition_revision,
+        current_kpi_definition_revision,
+        kpi_definition_revision_by_id,
+    )
     from pipeline.locators import resolve_locator_for_persist
 
     inserted = 0
@@ -871,6 +966,10 @@ def persist_manifest(
     extracted_by = manifest.extracted_by or (
         f"llm:{manifest.model_name}" if manifest.model_name else "llm"
     )
+    comparatives_by_name: dict[str, list[KpiComparativeValue]] = {}
+    for comp_val in manifest.comparative_values:
+        comparatives_by_name.setdefault(comp_val.name, []).append(comp_val)
+    has_def_rev_table = _table_exists(conn, "kpi_definition_revisions")
 
     for kpi in manifest.values:
         effective_nature = (
@@ -1074,6 +1173,44 @@ def persist_manifest(
             source_doc_id=manifest.source_doc_id,
             ticker=manifest.ticker,
         )
+        prior_def_rev = (
+            current_kpi_definition_revision(conn, kpi_definition_id=kpi_def_id)
+            if has_def_rev_table
+            else None
+        )
+        kpi_comparatives = comparatives_by_name.get(kpi.name, [])
+        overlap_candidate = kpi.comparative_overlap or manifest.comparative_overlaps.get(kpi.name)
+        if overlap_candidate is None and kpi_comparatives:
+            prior_comp = next(
+                (
+                    cv
+                    for cv in kpi_comparatives
+                    if cv.period_end.date() < manifest.period_end.date()
+                ),
+                None,
+            )
+            if prior_comp is not None:
+                cv_val, _, cv_mismatch = _reconcile_unit(
+                    prior_comp.value, prior_comp.unit, canonical
+                )
+                if not cv_mismatch:
+                    cv_loc_json = resolve_locator_for_persist(
+                        conn,
+                        locator=prior_comp.locator,
+                        run_id=run_id,
+                        source_doc_id=manifest.source_doc_id,
+                        ticker=manifest.ticker,
+                    )
+                    overlap_candidate = ComparativeOverlapCandidate(
+                        period_end=prior_comp.period_end.date().isoformat(),
+                        successor_comparative_value=cv_val,
+                        fiscal_period_type=prior_comp.fiscal_period_type,
+                        predecessor_value=prior_comp.predecessor_value,
+                        source_locator=_locator_dict_from_json(cv_loc_json),
+                    )
+        earliest_comp_dt = (
+            min(cv.period_end for cv in kpi_comparatives) if kpi_comparatives else None
+        )
         definition_binding = bind_forward_kpi_definition_revision(
             conn,
             kpi_definition_id=kpi_def_id,
@@ -1085,11 +1222,92 @@ def persist_manifest(
             context=semantic_context,
             reviewed_by=manifest.reviewed_by,
             source_locator_json=resolved_locator,
+            comparative_overlap=overlap_candidate,
+            overlap_policy=manifest.overlap_policy,
+            definition_effective_at=earliest_comp_dt,
         )
         bound_revision_id = (
             None if definition_binding is None else definition_binding.kpi_definition_revision_id
         )
         bound_knowledge_at = None if definition_binding is None else definition_binding.knowledge_at
+        if bound_revision_id is not None and (
+            kpi.split_scale_bridge is not None or kpi.recast_bridge is not None
+        ):
+            new_rev = kpi_definition_revision_by_id(
+                conn, kpi_definition_revision_id=bound_revision_id
+            )
+            if new_rev is None:
+                raise RuntimeError(
+                    "bound KPI definition revision disappeared before bridge admission"
+                )
+            bridge_effective_at = (
+                manifest.period_end.replace(tzinfo=UTC)
+                if manifest.period_end.tzinfo is None
+                else manifest.period_end.astimezone(UTC)
+            )
+            if kpi.split_scale_bridge is not None:
+                intent = kpi.split_scale_bridge
+                pred_rev_id = intent.predecessor_definition_revision_id or (
+                    None if prior_def_rev is None else prior_def_rev.kpi_definition_revision_id
+                )
+                if pred_rev_id is None or pred_rev_id == new_rev.kpi_definition_revision_id:
+                    raise ValueError(
+                        "split_scale_bridge requires a distinct predecessor definition revision"
+                    )
+                admit_split_scale_bridge(
+                    conn,
+                    predecessor_definition_revision_id=pred_rev_id,
+                    successor_definition_revision_id=new_rev.kpi_definition_revision_id,
+                    scale_numerator=intent.scale_numerator,
+                    scale_denominator=intent.scale_denominator,
+                    applies_to=intent.applies_to,
+                    effective_date=intent.effective_date,
+                    comparative_period_end=intent.comparative_overlap.period_end,
+                    successor_comparative_value=intent.comparative_overlap.successor_comparative_value,
+                    fiscal_period_type=intent.comparative_overlap.fiscal_period_type,
+                    predecessor_value=intent.comparative_overlap.predecessor_value,
+                    tolerance_policy=manifest.overlap_policy,
+                    source_document_version_id=new_rev.source_document_version_id,
+                    source_evidence_node_id=new_rev.source_evidence_node_id,
+                    source_locator=intent.comparative_overlap.source_locator
+                    or new_rev.source_locator,
+                    reviewed_by=manifest.reviewed_by,
+                    effective_at=bridge_effective_at,
+                    knowledge_at=new_rev.knowledge_at,
+                    recorded_at=new_rev.recorded_at,
+                )
+            if kpi.recast_bridge is not None:
+                r_intent = kpi.recast_bridge
+                pred_rev_id = r_intent.predecessor_definition_revision_id or (
+                    None if prior_def_rev is None else prior_def_rev.kpi_definition_revision_id
+                )
+                if pred_rev_id is None or pred_rev_id == new_rev.kpi_definition_revision_id:
+                    raise ValueError(
+                        "recast_bridge requires a distinct predecessor definition revision"
+                    )
+                comp_periods = tuple(
+                    sorted(
+                        {
+                            *r_intent.comparative_periods_present,
+                            *(cv.period_end.date().isoformat() for cv in kpi_comparatives),
+                        }
+                    )
+                )
+                admit_recast_comparative_bridge(
+                    conn,
+                    predecessor_definition_revision_id=pred_rev_id,
+                    successor_definition_revision_id=new_rev.kpi_definition_revision_id,
+                    recast_reason=r_intent.recast_reason,
+                    scope_change_summary=r_intent.scope_change_summary,
+                    comparative_periods_present=comp_periods,
+                    source_document_version_id=new_rev.source_document_version_id,
+                    source_evidence_node_id=new_rev.source_evidence_node_id,
+                    source_locator=new_rev.source_locator,
+                    reviewed_by=manifest.reviewed_by,
+                    effective_at=bridge_effective_at,
+                    knowledge_at=new_rev.knowledge_at,
+                    recorded_at=new_rev.recorded_at,
+                )
         fact_id, was_inserted, _, _ = _insert_kpi_fact(
             conn,
             ticker=manifest.ticker,
@@ -1129,6 +1347,79 @@ def persist_manifest(
             inserted += 1
         else:
             skipped += 1
+
+        if kpi_comparatives and semantic_context.status is KpiSemanticStatus.ADMITTED:
+            for comp_val in kpi_comparatives:
+                cv_value, cv_unit, cv_mismatch = _reconcile_unit(
+                    comp_val.value, comp_val.unit, canonical
+                )
+                if cv_mismatch:
+                    continue
+                cv_ok, _ = _validate_value_range(cv_value, cv_unit)
+                if not cv_ok:
+                    continue
+                cv_excerpt = normalize_source_excerpt(comp_val.source_excerpt)
+                cv_locator = resolve_locator_for_persist(
+                    conn,
+                    locator=comp_val.locator,
+                    run_id=run_id,
+                    source_doc_id=manifest.source_doc_id,
+                    ticker=manifest.ticker,
+                )
+                comp_context = semantic_context.model_copy(
+                    update={
+                        "metric_name_as_reported": (
+                            comp_val.metric_name_as_reported
+                            or semantic_context.metric_name_as_reported
+                        ),
+                        "reported_period_end": comp_val.period_end.date(),
+                        "period_role": KpiPeriodRole.PRIOR_YEAR_COMPARATOR,
+                        "publication_lane": KpiPublicationLane.COMPARATOR,
+                        "source_row_label": (
+                            comp_val.source_row_label or semantic_context.source_row_label
+                        ),
+                        "source_column_header": (
+                            comp_val.source_column_header or semantic_context.source_column_header
+                        ),
+                        "source_value_text": comp_val.source_value_text,
+                    }
+                )
+                comp_fact_id, comp_inserted, _, _ = _insert_kpi_fact(
+                    conn,
+                    ticker=manifest.ticker,
+                    period_end=comp_val.period_end,
+                    fiscal_period_type=comp_val.fiscal_period_type,
+                    kpi_definition_id=kpi_def_id,
+                    value=cv_value,
+                    unit=cv_unit,
+                    currency=comp_val.currency,
+                    source_doc_id=manifest.source_doc_id,
+                    confidence=score_confidence(
+                        tier=tier_for_source_type(manifest.primary_source),
+                        extracted_by=extracted_by,
+                        self_reported=comp_val.confidence,
+                    ),
+                    extracted_by=extracted_by,
+                    locator=cv_locator,
+                    source_excerpt=cv_excerpt,
+                    semantic_context=comp_context,
+                    kpi_definition_revision_id=bound_revision_id,
+                    semantic_reviewed_by=manifest.reviewed_by,
+                    semantic_knowledge_at=bound_knowledge_at,
+                )
+                if comp_fact_id is not None:
+                    persist_kpi_semantic_context(
+                        conn,
+                        kpi_fact_id=comp_fact_id,
+                        context=comp_context,
+                        reviewed_by=manifest.reviewed_by,
+                        knowledge_at=bound_knowledge_at,
+                        kpi_definition_revision_id=bound_revision_id,
+                    )
+                if comp_inserted:
+                    inserted += 1
+                else:
+                    skipped += 1
 
     # Most callers own a complete manifest transaction.  The issuer activation
     # seam also batches KPI rows, segment cells, and the coverage receipt in one

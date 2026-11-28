@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -40,7 +40,11 @@ from pipeline.kpi_atomic_admission import (
 from pipeline.kpi_atomic_admission import (
     normalize_reported_metric_label,
 )
-from pipeline.kpi_definition_revisions import bind_forward_kpi_definition_revision
+from pipeline.kpi_comparability_bridges import OverlapTolerancePolicy
+from pipeline.kpi_definition_revisions import (
+    ComparativeOverlapCandidate,
+    bind_forward_kpi_definition_revision,
+)
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
@@ -517,6 +521,49 @@ def _default_focus_tickers(conn: sqlite3.Connection) -> tuple[str, ...] | None:
     return tuple(str(r[0]).strip() for r in rows if r[0])
 
 
+def _parse_locator_dict(raw: object) -> dict[str, object] | None:
+    if raw is None:
+        return None
+    try:
+        parsed: object = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict) and parsed:
+        return {str(k): v for k, v in cast("dict[object, object]", parsed).items()}
+    return None
+
+
+def _collect_same_doc_comparators(
+    active_rows: Sequence[_ActiveFactRow],
+) -> dict[
+    tuple[int, int], list[tuple[date, Decimal, FiscalPeriodType | None, dict[str, object] | None]]
+]:
+    """Index same-document comparator rows already loaded by ``_load_active_fact_rows``."""
+    out: dict[
+        tuple[int, int],
+        list[tuple[date, Decimal, FiscalPeriodType | None, dict[str, object] | None]],
+    ] = {}
+    for row in active_rows:
+        if row.source_doc_id is None:
+            continue
+        if row.ctx_publication_lane != KpiPublicationLane.COMPARATOR.value:
+            continue
+        p_date = _parse_period_date(row.period_end_raw)
+        val = _parse_finite_decimal(row.value_raw)
+        if p_date is None or val is None:
+            continue
+        fpt: FiscalPeriodType | None = None
+        if row.fiscal_period_type_raw is not None:
+            try:
+                fpt = FiscalPeriodType(str(row.fiscal_period_type_raw))
+            except ValueError:
+                fpt = None
+        out.setdefault((row.kpi_definition_id, row.source_doc_id), []).append(
+            (p_date, val, fpt, _parse_locator_dict(row.locator_raw))
+        )
+    return out
+
+
 def run_batch_kpi_admission(
     conn: sqlite3.Connection,
     *,
@@ -527,6 +574,9 @@ def run_batch_kpi_admission(
     require_resolved_view: bool = False,
     reviewed_by: str = "batch_admission:deterministic_v1",
     knowledge_at: datetime | None = None,
+    comparative_overlaps: Mapping[int | tuple[int, date], ComparativeOverlapCandidate]
+    | None = None,
+    overlap_policy: OverlapTolerancePolicy | None = None,
 ) -> KpiBatchAdmissionReport:
     """Evaluate active ``kpi_facts`` and optionally append ``admitted`` semantic contexts.
 
@@ -542,6 +592,7 @@ def run_batch_kpi_admission(
         tickers if tickers is not None else _default_focus_tickers(conn)
     )
     active_rows, has_resolved_view = _load_active_fact_rows(conn, tickers=effective_tickers)
+    same_doc_comparators = _collect_same_doc_comparators(active_rows)
     existing_admitted = _collect_existing_admitted_signatures(active_rows)
     default_signatures = _collect_default_signatures(
         active_rows,
@@ -624,6 +675,26 @@ def run_batch_kpi_admission(
                     and parsed_unit is not None
                     and parsed_fpt is not None
                 ):
+                    row_overlap: ComparativeOverlapCandidate | None = None
+                    if comparative_overlaps is not None:
+                        row_overlap = comparative_overlaps.get(
+                            (row.kpi_definition_id, parsed_period_end.date())
+                        ) or comparative_overlaps.get(row.kpi_definition_id)
+                    if row_overlap is None and row.source_doc_id is not None:
+                        doc_comps = same_doc_comparators.get(
+                            (row.kpi_definition_id, row.source_doc_id), ()
+                        )
+                        prior_comp = next(
+                            (c for c in doc_comps if c[0] < parsed_period_end.date()),
+                            None,
+                        )
+                        if prior_comp is not None:
+                            row_overlap = ComparativeOverlapCandidate(
+                                period_end=prior_comp[0].isoformat(),
+                                successor_comparative_value=prior_comp[1],
+                                fiscal_period_type=prior_comp[2],
+                                source_locator=prior_comp[3],
+                            )
                     definition_binding = bind_forward_kpi_definition_revision(
                         conn,
                         kpi_definition_id=row.kpi_definition_id,
@@ -638,6 +709,8 @@ def run_batch_kpi_admission(
                         source_locator_json=(
                             None if row.locator_raw is None else str(row.locator_raw)
                         ),
+                        comparative_overlap=row_overlap,
+                        overlap_policy=overlap_policy,
                     )
             if definition_binding is not None:
                 persist_kpi_semantic_context(

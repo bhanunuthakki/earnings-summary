@@ -39,12 +39,22 @@ from pipeline.issuer_document_coverage import (
     persist_document_coverage_receipt,
     reconcile_extractor_fact_population,
 )
+from pipeline.kpi_comparability_bridges import (
+    OverlapTolerancePolicy,
+    OverlapVerificationError,
+    RenameOverlapBridge,
+    evaluate_overlap_witness,
+)
 from pipeline.kpi_definition_revisions import (
+    ComparativeOverlapCandidate,
     IssuerKpiDefinitionRevision,
+    KpiDefinitionComparabilityDisposition,
     KpiDefinitionComparabilityRevision,
+    KpiDefinitionRelationKind,
     current_kpi_definition_comparability_revision,
     current_kpi_definition_revision,
     kpi_definition_revision_by_id,
+    lookup_revision_reported_value,
     validate_kpi_definition_comparability_candidate,
     validate_kpi_definition_revision_candidate,
 )
@@ -1029,6 +1039,108 @@ def _apply_segments(conn: sqlite3.Connection, manifest: IssuerFactManifestAny) -
         periods_inserted += period_inserted
         dimensions_inserted += dimension_count
     return (periods_inserted, dimensions_inserted)
+
+
+def build_reviewed_comparability_from_overlap(
+    conn: sqlite3.Connection,
+    *,
+    predecessor_definition_revision_id: str,
+    successor_definition_revision_id: str,
+    comparative_overlap: ComparativeOverlapCandidate,
+    source_document_version_id: str,
+    source_evidence_node_id: str,
+    source_locator: dict[str, object],
+    reviewed_by: str,
+    effective_at: datetime,
+    knowledge_at: datetime,
+    recorded_at: datetime,
+    overlap_policy: OverlapTolerancePolicy | None = None,
+    fail_on_mismatch: bool = False,
+) -> KpiDefinitionComparabilityRevision:
+    """Verify a ``ComparativeOverlapCandidate`` and build a sealed v2 comparability revision.
+
+    Matches within tolerance emit ``RENAMED`` + ``CONTINUOUS`` + ``RenameOverlapBridge``;
+    mismatches fail closed as ``REDEFINED`` + ``NOT_COMPARABLE`` (or raise
+    ``OverlapVerificationError`` when ``fail_on_mismatch=True`` or predecessor
+    evidence is unavailable).
+    """
+    resolved_pred = (
+        comparative_overlap.predecessor_value
+        if comparative_overlap.predecessor_value is not None
+        else lookup_revision_reported_value(
+            conn,
+            kpi_definition_revision_id=predecessor_definition_revision_id,
+            period_end=comparative_overlap.period_end,
+            fiscal_period_type=comparative_overlap.fiscal_period_type,
+        )
+    )
+    if resolved_pred is None:
+        raise OverlapVerificationError(
+            "predecessor fact value is unavailable for comparative overlap verification"
+        )
+    witness_locator = comparative_overlap.source_locator or source_locator
+    ok, witness, mismatch_reason = evaluate_overlap_witness(
+        period_end=comparative_overlap.period_end,
+        predecessor_value=resolved_pred,
+        successor_value=comparative_overlap.successor_comparative_value,
+        source_locator=witness_locator,
+        fiscal_period_type=comparative_overlap.fiscal_period_type,
+        policy=overlap_policy,
+    )
+    if not ok or witness is None:
+        if fail_on_mismatch:
+            raise OverlapVerificationError(mismatch_reason or "rename overlap verification failed")
+        relation_kind = KpiDefinitionRelationKind.REDEFINED
+        disposition = KpiDefinitionComparabilityDisposition.NOT_COMPARABLE
+        reason_code = "rename_overlap_mismatch"
+        bridge_spec: RenameOverlapBridge | None = None
+    else:
+        relation_kind = KpiDefinitionRelationKind.RENAMED
+        disposition = KpiDefinitionComparabilityDisposition.CONTINUOUS
+        reason_code = "verified_rename_overlap"
+        bridge_spec = RenameOverlapBridge(overlap_witness=witness)
+
+    current = current_kpi_definition_comparability_revision(
+        conn,
+        predecessor_definition_revision_id=predecessor_definition_revision_id,
+        successor_definition_revision_id=successor_definition_revision_id,
+    )
+    rev_num = 1 if current is None else current.revision + 1
+    supersedes_id = None if current is None else current.comparability_revision_id
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "bridge": None if bridge_spec is None else bridge_spec.model_dump(mode="json"),
+                "disposition": disposition.value,
+                "predecessor": predecessor_definition_revision_id,
+                "relation_kind": relation_kind.value,
+                "revision": rev_num,
+                "successor": successor_definition_revision_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    return KpiDefinitionComparabilityRevision(
+        comparability_revision_id=f"rev-kcr-overlap-{digest}",
+        idempotency_key=f"rev-kcr-overlap-key:{digest}",
+        predecessor_definition_revision_id=predecessor_definition_revision_id,
+        successor_definition_revision_id=successor_definition_revision_id,
+        revision=rev_num,
+        supersedes_comparability_revision_id=supersedes_id,
+        relation_kind=relation_kind,
+        disposition=disposition,
+        reason_code=reason_code,
+        reviewed_by=reviewed_by,
+        source_document_version_id=source_document_version_id,
+        source_evidence_node_id=source_evidence_node_id,
+        source_locator=source_locator,
+        bridge_spec=bridge_spec,
+        effective_at=effective_at,
+        knowledge_at=knowledge_at,
+        recorded_at=recorded_at,
+    )
 
 
 def apply_issuer_fact_manifest(

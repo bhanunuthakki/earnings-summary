@@ -8,11 +8,14 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from io import StringIO
 
 from report.models import (
     CellSource,
     FinancialsSection,
+    KpiSeriesBreak,
+    KpiSeriesSegment,
     SectionStatus,
     SegmentSecondaryExpansion,
     SegmentSeries,
@@ -20,7 +23,7 @@ from report.models import (
     SignalRow,
     SignalsSection,
 )
-from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
+from report.renderers.charts_v2 import MatrixRow, segmented_kpi_chart, yoy_heatmap_table
 from report.renderers.workspace_data import quarter_short
 from report.renderers.workspace_sections._shared import (
     _empty_panel,
@@ -235,6 +238,114 @@ def _segment_secondary_expansions_panel(body: StringIO, seg: SegmentsSection) ->
         body.write("</div></div>")
 
 
+@dataclass(frozen=True)
+class _ChartPointAdapter:
+    period_end: str
+    value: float
+
+
+@dataclass(frozen=True)
+class _ChartSegmentAdapter:
+    segment_index: int
+    reported_label: str
+    is_transformed: bool
+    bridge_kind: str | None
+    points: tuple[_ChartPointAdapter, ...]
+
+
+@dataclass(frozen=True)
+class _ChartSeriesAdapter:
+    segments: tuple[_ChartSegmentAdapter, ...]
+    breaks: tuple[KpiSeriesBreak, ...]
+
+
+def _break_badge_html(breaks: list[KpiSeriesBreak]) -> str:
+    if not breaks:
+        return ""
+    has_unbridged = any(b.disposition == "not_comparable" for b in breaks)
+    chip_text = "break" if has_unbridged else "bridged"
+    tooltip = "; ".join(f"{b.period_end}: {b.label}" for b in breaks)
+    return (
+        f'<span class="k-chip k-chip-warn k-chip-mono" data-kpi-break="true" '
+        f'title="{_esc(tooltip)}">{chip_text}</span>'
+    )
+
+
+def _break_indices_for_periods(
+    breaks: list[KpiSeriesBreak], periods: list[str]
+) -> dict[int, str] | None:
+    if not breaks or not periods:
+        return None
+    out: dict[int, str] = {}
+    for brk in breaks:
+        target = brk.period_label or brk.period_end[:4]
+        for idx, p in enumerate(periods):
+            if p == target or p == brk.period_end:
+                existing = out.get(idx)
+                out[idx] = f"{existing}; {brk.label}" if existing else brk.label
+                break
+    return out or None
+
+
+def _merge_cell_titles(
+    base_titles: list[str | None] | None,
+    reasons: list[str | None],
+    length: int,
+) -> list[str | None] | None:
+    if not any(reasons):
+        return base_titles
+    merged: list[str | None] = []
+    for i in range(length):
+        src_t = base_titles[i] if base_titles is not None and i < len(base_titles) else None
+        reason = reasons[i] if i < len(reasons) else None
+        if src_t and reason:
+            merged.append(f"{src_t} · {reason}")
+        else:
+            merged.append(src_t or reason)
+    return merged
+
+
+def _write_kpi_break_annotations(
+    body: StringIO,
+    entries: list[tuple[str, str, list[KpiSeriesSegment], list[KpiSeriesBreak]]],
+) -> None:
+    """Render segmented charts and typed break footnotes ONLY for KPIs with breaks/splits."""
+    for name, unit, segments, breaks in entries:
+        if not breaks and len(segments) <= 1:
+            continue
+        if segments:
+            adapter = _ChartSeriesAdapter(
+                segments=tuple(
+                    _ChartSegmentAdapter(
+                        segment_index=seg.segment_index,
+                        reported_label=seg.reported_label,
+                        is_transformed=seg.is_transformed,
+                        bridge_kind=seg.bridge_kind,
+                        points=tuple(
+                            _ChartPointAdapter(period_end=pe, value=val) for pe, val in seg.points
+                        ),
+                    )
+                    for seg in segments
+                ),
+                breaks=tuple(breaks),
+            )
+            fmt = "pct" if unit in {"%", "percent"} else ("dollar" if "$" in unit else "compact")
+            body.write('<div class="chart-cell">')
+            body.write(segmented_kpi_chart(adapter, title=name, value_fmt=fmt))
+            body.write("</div>")
+        if breaks:
+            items = [
+                f"{b.period_end} [{b.relation_kind}/{b.disposition}"
+                + (f" · {b.bridge_kind}" if b.bridge_kind else "")
+                + f"]: {b.label}"
+                for b in breaks
+            ]
+            body.write(
+                f'<div class="cv2-matrix-footnote" data-kpi-break-note="true">'
+                f"<strong>{_esc(name)} comparability:</strong> {_esc(' | '.join(items))}</div>"
+            )
+
+
 def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
     """YoY heatmap for the analyst-tracked KPIs surfaced as kpi_chart_series.
 
@@ -246,7 +357,9 @@ def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
     if not series:
         return
     periods = fin.quarter_labels_full or fin.quarter_labels
+    period_list = list(periods)
     matrix_rows: list[MatrixRow] = []
+    break_entries: list[tuple[str, str, list[KpiSeriesSegment], list[KpiSeriesBreak]]] = []
     for s in series:
         levels = s.levels_full or s.values
         if not levels or all(v is None for v in levels):
@@ -264,6 +377,12 @@ def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
             latest_src = next((src for src in reversed(s.sources_full) if src is not None), None)
             if latest_src is not None:
                 label_suffix = _source_chip_html(latest_src)
+        cell_titles = _merge_cell_titles(cell_titles, s.yoy_reasons_full, len(levels))
+        badge = _break_badge_html(s.breaks)
+        if badge:
+            label_suffix = f"{label_suffix} {badge}".strip()
+        if s.breaks or len(s.segments) > 1:
+            break_entries.append((s.name, s.unit, s.segments, s.breaks))
         matrix_rows.append(
             MatrixRow(
                 name=s.name,
@@ -271,13 +390,18 @@ def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
                 unit=s.unit,
                 cell_titles=cell_titles,
                 label_suffix_html=label_suffix,
+                comparison_eligible_edges=s.comparison_eligible_edges,
+                yoy_overrides=s.yoy_pct_full,
+                break_indices=_break_indices_for_periods(s.breaks, period_list),
             )
         )
     if not matrix_rows:
         return
     body.write(_panel_head("Tracked KPIs", sub=f"{len(matrix_rows)} analyst-tracked series"))
     body.write('<div class="prose-pad">')
-    body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
+    body.write(yoy_heatmap_table(matrix_rows, period_list, title="", display_quarters=12))
+    if break_entries:
+        _write_kpi_break_annotations(body, break_entries)
     body.write("</div></div>")
 
 
@@ -294,7 +418,9 @@ def _annual_kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None
     years = fin.annual_kpi_years
     if not series or not years:
         return
+    periods = [str(y) for y in years]
     matrix_rows: list[MatrixRow] = []
+    break_entries: list[tuple[str, str, list[KpiSeriesSegment], list[KpiSeriesBreak]]] = []
     for s in series:
         if not s.values or all(v is None for v in s.values):
             continue
@@ -309,6 +435,12 @@ def _annual_kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None
             latest_src = next((src for src in reversed(s.sources_full) if src is not None), None)
             if latest_src is not None:
                 label_suffix = _source_chip_html(latest_src)
+        cell_titles = _merge_cell_titles(cell_titles, s.yoy_reasons_full, len(s.values))
+        badge = _break_badge_html(s.breaks)
+        if badge:
+            label_suffix = f"{label_suffix} {badge}".strip()
+        if s.breaks or len(s.segments) > 1:
+            break_entries.append((s.name, s.unit, s.segments, s.breaks))
         matrix_rows.append(
             MatrixRow(
                 name=s.name,
@@ -316,11 +448,13 @@ def _annual_kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None
                 unit=s.unit,
                 cell_titles=cell_titles,
                 label_suffix_html=label_suffix,
+                comparison_eligible_edges=s.comparison_eligible_edges,
+                yoy_overrides=s.yoy_pct_full,
+                break_indices=_break_indices_for_periods(s.breaks, periods),
             )
         )
     if not matrix_rows:
         return
-    periods = [str(y) for y in years]
     # Trailing CAGR/Δ columns in YEARS, trimmed to the available span so a short
     # annual history (NU CAR = 3 years) doesn't advertise an empty 3y column.
     cagr_years = tuple(y for y in (1, 2, 3) if y < len(years))
@@ -342,6 +476,8 @@ def _annual_kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None
             periods_per_year=1,
         )
     )
+    if break_entries:
+        _write_kpi_break_annotations(body, break_entries)
     body.write("</div></div>")
 
 

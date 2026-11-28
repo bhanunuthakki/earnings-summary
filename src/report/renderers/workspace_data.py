@@ -237,6 +237,10 @@ class KpiStripTile:
     # the tile can emit a fact_ref doorway (Law 2) — None degrades to the plain
     # inert tile (never a dead button; see workspace_sections/chrome._kpi_tile).
     kpi_definition_id: int | None = None
+    # Optional segmented runs and break labels when the KPI has comparability
+    # boundaries; empty for unbroken/legacy series.
+    segment_values: tuple[tuple[float, ...], ...] = ()
+    break_labels: tuple[str, ...] = ()
 
 
 _PCT_HINT_RX = re.compile(r"%|margin|growth|rate|share", re.IGNORECASE)
@@ -349,7 +353,18 @@ def select_kpi_strip(rows: list[KpiLedgerRow], n: int = 4) -> list[KpiStripTile]
         kind = _kpi_strip_kind(row.unit, row.name)
 
         latest = values[-1]
-        prev = values[-2] if len(values) >= 2 else None
+        has_breaks = bool(row.breaks) or len(row.segments) > 1
+        seg_values: tuple[tuple[float, ...], ...] = ()
+        break_labels: tuple[str, ...] = ()
+        if has_breaks and row.segments:
+            seg_values = tuple(
+                tuple(v for _, v in seg.points) for seg in row.segments if seg.points
+            )
+            break_labels = tuple(b.label for b in row.breaks)
+            latest_seg = seg_values[-1] if seg_values else ()
+            prev = latest_seg[-2] if len(latest_seg) >= 2 else None
+        else:
+            prev = values[-2] if len(values) >= 2 else None
         latest_display = _fmt_strip_value(latest, kind)
         delta_display: str | None = None
         delta_sign = ""
@@ -369,6 +384,8 @@ def select_kpi_strip(rows: list[KpiLedgerRow], n: int = 4) -> list[KpiStripTile]
                 delta_display=delta_display,
                 delta_sign=delta_sign,
                 kpi_definition_id=row.kpi_definition_id,
+                segment_values=seg_values,
+                break_labels=break_labels,
             )
         )
         if len(tiles) >= n:
@@ -514,6 +531,67 @@ def kpi_trend_delta(
         base = points[-2][1]
         tag = "QoQ"
     return _format_delta(latest_value, base, unit, name, tag)
+
+
+_UNCOMPARABLE_YOY_STATUSES = frozenset(
+    {
+        "not_comparable",
+        "recast_comparative_missing",
+        "composite_member_missing",
+        "period_kind_mismatch",
+        "no_explicit_comparability",
+    }
+)
+
+
+def kpi_comparable_trend_delta(row: KpiLedgerRow) -> tuple[str | None, str, str | None]:
+    """Return ``(label, direction, tooltip)`` honoring comparability bridges/breaks.
+
+    When ``row.comparable_yoy_status`` is None (legacy/unmigrated rows), delegates
+    to :func:`kpi_trend_delta` with identical output. When populated, bridges
+    admitted YoY deltas and fails closed (never computes a naive YoY/QoQ across
+    an unbridged semantic break).
+    """
+    status = row.comparable_yoy_status
+    if status is None:
+        label, sign = kpi_trend_delta(row.history, row.unit, row.name)
+        return label, sign, None
+    if status in {"comparable", "comparable_with_bridge"}:
+        mode = _delta_mode(row.unit, row.name)
+        if mode == "pct":
+            if row.comparable_yoy_pct is None:
+                return None, "", row.comparable_yoy_reason
+            change = row.comparable_yoy_pct * 100.0
+            if abs(change) < 0.5:
+                return None, "", row.comparable_yoy_reason
+            arrow, direction = ("↑", "pos") if change > 0 else ("↓", "neg")
+            return f"{arrow} {abs(change):.0f}% YoY", direction, row.comparable_yoy_reason
+        if row.comparable_yoy_delta is None:
+            return None, "", row.comparable_yoy_reason
+        delta = row.comparable_yoy_delta
+        if mode == "bps":
+            if abs(delta) < 0.5:
+                return None, "", row.comparable_yoy_reason
+            arrow, direction = ("↑", "pos") if delta > 0 else ("↓", "neg")
+            return f"{arrow} {abs(delta):.0f}bps YoY", direction, row.comparable_yoy_reason
+        if abs(delta) < 0.05:
+            return None, "", row.comparable_yoy_reason
+        arrow, direction = ("↑", "pos") if delta > 0 else ("↓", "neg")
+        suffix = "pp" if mode == "pp" else ""
+        return f"{arrow} {_trim(abs(delta))}{suffix} YoY", direction, row.comparable_yoy_reason
+    if status in _UNCOMPARABLE_YOY_STATUSES:
+        return "uncomparable", "warn", row.comparable_yoy_reason or f"YoY unavailable ({status})"
+    # prior_period_missing etc.: only fall back to QoQ within the latest contiguous segment.
+    if row.segments:
+        latest_seg = next((seg for seg in reversed(row.segments) if seg.points), None)
+        if latest_seg is not None and len(latest_seg.points) >= 2:
+            cur_val = latest_seg.points[-1][1]
+            prev_val = latest_seg.points[-2][1]
+            label, sign = _format_delta(cur_val, prev_val, row.unit, row.name, "QoQ")
+            return label, sign, row.comparable_yoy_reason
+        return None, "", row.comparable_yoy_reason
+    label, sign = kpi_trend_delta(row.history, row.unit, row.name)
+    return label, sign, row.comparable_yoy_reason
 
 
 # ---------------------------------------------------------------------------

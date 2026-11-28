@@ -67,6 +67,7 @@ from report.sections._common import (
     open_repo_db,
     quarter_label,
 )
+from report.sections._kpi_comparability import resolve_aligned_kpi_comparability
 from sources.financial_growth_evidence import (
     GROWTH_WINDOWS,
     FinancialGrowthReference,
@@ -532,6 +533,7 @@ def _resolve_priorities(
 
         # Emit in requested order — financial line items and KPI series
         # interleave exactly as the single-pass reader always did.
+        annual_def_ids: list[int | None] = []
         for index in range(len(requested)):
             if index in financial_by_index:
                 resolved.append(financial_by_index[index])
@@ -543,13 +545,56 @@ def _resolve_priorities(
                 annual = annual_results[index]
                 annual_raw.append(annual)
                 resolved.append(annual[0])
+                matched_def_id: int | None = None
+                if db_conn is not None and context is not None:
+                    ids = context.matching_definition_ids(db_conn, ticker, annual[0])
+                    if ids:
+                        matched_def_id = ids[0]
+                annual_def_ids.append(matched_def_id)
+        annual_series, annual_years = _align_annual_kpis(annual_raw)
+        if db_conn is not None and annual_series and annual_years:
+            year_labels = [str(y) for y in annual_years]
+            enriched_annual: list[AnnualKpiSeries] = []
+            for series_item, def_id in zip(annual_series, annual_def_ids, strict=True):
+                comp = (
+                    None
+                    if def_id is None
+                    else resolve_aligned_kpi_comparability(
+                        db_conn,
+                        kpi_definition_id=def_id,
+                        axis_labels=year_labels,
+                        axis_kind="annual",
+                    )
+                )
+                if comp is None:
+                    enriched_annual.append(series_item)
+                else:
+                    merged_values = [
+                        comp.values_by_label.get(lbl, orig)
+                        for lbl, orig in zip(year_labels, series_item.values, strict=True)
+                    ]
+                    enriched_annual.append(
+                        series_item.model_copy(
+                            update={
+                                "values": merged_values,
+                                "kpi_definition_id": comp.kpi_definition_id,
+                                "comparability_status": comp.status,
+                                "segments": comp.segments,
+                                "breaks": comp.breaks,
+                                "yoy_pct_full": comp.yoy_pct_full,
+                                "yoy_status_full": comp.yoy_status_full,
+                                "yoy_reasons_full": comp.yoy_reasons_full,
+                                "comparison_eligible_edges": comp.comparison_eligible_edges,
+                            }
+                        )
+                    )
+            annual_series = enriched_annual
     finally:
         if db_conn is not None:
             _BUILD_CONTEXTS.pop(db_conn, None)
             if conn is None:
                 db_conn.close()
 
-    annual_series, annual_years = _align_annual_kpis(annual_raw)
     return resolved, kpi_series, annual_series, annual_years
 
 
@@ -1110,10 +1155,16 @@ def _kpi_series_for(
         period_types=QUARTERLY_FACT_PERIOD_TYPES,
         definition_ids=definition_ids,
     )
-    if not series_rows:
+    comp = resolve_aligned_kpi_comparability(
+        conn,
+        kpi_definition_id=definition_ids[0],
+        axis_labels=quarter_labels_full,
+        axis_kind="quarterly",
+    )
+    if not series_rows and (comp is None or not comp.values_by_label):
         return None
     by_label: dict[str, float] = {}
-    canonical_name = kpi_name
+    canonical_name = resolved_name
     canonical_unit = ""
     for r in series_rows:
         canonical_name = str(r["name"])
@@ -1131,6 +1182,11 @@ def _kpi_series_for(
             by_label[label] = float(str(r["value"]))
         except ValueError:
             continue
+    if comp is not None:
+        # Revision-aware chart segments own plotted values when bound (e.g.
+        # split-adjusted predecessor values, rename-bridged history, or recast
+        # comparators that legacy single-label SQL filters out).
+        by_label.update(comp.values_by_label)
     values = [by_label.get(lbl) for lbl in quarter_labels]
     if all(v is None for v in values):
         return None
@@ -1162,6 +1218,14 @@ def _kpi_series_for(
             if any(s is not None for s in sources_full)
             else []
         ),
+        kpi_definition_id=None if comp is None else comp.kpi_definition_id,
+        comparability_status=None if comp is None else comp.status,
+        segments=[] if comp is None else comp.segments,
+        breaks=[] if comp is None else comp.breaks,
+        yoy_pct_full=None if comp is None else comp.yoy_pct_full,
+        yoy_status_full=[] if comp is None else comp.yoy_status_full,
+        yoy_reasons_full=[] if comp is None else comp.yoy_reasons_full,
+        comparison_eligible_edges=None if comp is None else comp.comparison_eligible_edges,
     )
 
 
