@@ -65,7 +65,6 @@ from provenance.selection import selected_transcripts_relation
 from transcripts.acquisition_semantics import (
     TranscriptAcquisitionEntrypoint,
 )
-from transcripts.immutable_staging import install_transcript_output
 
 _TRANSCRIPT_DIRS = (
     PROJECT_ROOT / "transcripts" / "processed",
@@ -132,6 +131,41 @@ def _stage_evidence_file(
             temporary.unlink()
     if evidence_snapshot.capture_snapshot(destination, raw_root).sha256 != digest:
         raise EvidenceSourceChangedError("staged transcript evidence failed verification")
+    return destination
+
+
+def _install_processed_transcript(
+    payload: bytes,
+    processed_root: Path,
+    filename: str,
+    *,
+    expected_sha256: str,
+) -> Path:
+    """Atomically write immutable transcript bytes into ``processed_root``."""
+    processed_root.mkdir(parents=True, exist_ok=True)
+    destination = processed_root / filename
+    if destination.exists():
+        existing_sha = evidence_snapshot.capture_snapshot(destination, processed_root).sha256
+        if existing_sha != expected_sha256:
+            raise EvidencePathConflictError("processed transcript path has different bytes")
+        return destination
+    temporary = processed_root / f".{filename}.{uuid4().hex}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            existing_sha = evidence_snapshot.capture_snapshot(destination, processed_root).sha256
+            if existing_sha != expected_sha256:
+                raise EvidencePathConflictError(
+                    "processed transcript path has different bytes"
+                ) from None
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
     return destination
 
 
@@ -857,15 +891,12 @@ def main() -> int:
                         project_root=evidence_root,
                         current_sha=snapshot.sha256,
                     )
-                    ingest_path = install_transcript_output(
+                    ingest_path = _install_processed_transcript(
                         snapshot.payload,
                         processed_root,
                         path.name,
                         expected_sha256=(
                             artifact.sha256 if artifact is not None else snapshot.sha256
-                        ),
-                        expected_size_bytes=(
-                            artifact.size_bytes if artifact is not None else len(snapshot.payload)
                         ),
                     )
                     ingest_root = processed_root

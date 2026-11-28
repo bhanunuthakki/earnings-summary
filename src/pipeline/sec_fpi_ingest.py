@@ -34,6 +34,7 @@ from pipeline.kpi_persistence import (
     find_or_create_kpi_definition,
 )
 from pipeline.restatement_detector import (
+    find_same_doc_kpi_fact_id,
     insert_kpi_with_restatement_detection,
     insert_with_restatement_detection,
 )
@@ -999,20 +1000,14 @@ def persist_fpi_facts(
             )
             target_kpi_id = new_kpi_id
             if target_kpi_id is None:
-                existing_kpi = conn.execute(
-                    "SELECT id FROM kpi_facts WHERE UPPER(ticker) = ? AND period_end = ? "
-                    "AND fiscal_period_type = ? AND kpi_definition_id = ? AND source_doc_id = ? "
-                    "ORDER BY id DESC LIMIT 1",
-                    (
-                        ticker.upper(),
-                        period_end,
-                        fiscal_period_type.upper(),
-                        kpi_def_id,
-                        doc_id,
-                    ),
-                ).fetchone()
-                if existing_kpi is not None:
-                    target_kpi_id = int(existing_kpi[0])
+                target_kpi_id = find_same_doc_kpi_fact_id(
+                    conn,
+                    ticker=ticker,
+                    period_end=period_end,
+                    fiscal_period_type=fiscal_period_type.upper(),
+                    kpi_definition_id=kpi_def_id,
+                    source_doc_id=doc_id,
+                )
             if target_kpi_id is not None:
                 ensure_deterministic_kpi_semantic_context(
                     conn,

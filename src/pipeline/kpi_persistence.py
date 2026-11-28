@@ -25,7 +25,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from compute.kpi_resolver import canonical_metric_name
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
-from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
+from models.facts import (
+    Currency,
+    FactLocator,
+    FiscalPeriodType,
+    LegacyEscapeHatch,
+    LocatorKind,
+    Unit,
+)
 from models.kpis import DefinitionOrigin, KpiMetricNature, ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
@@ -989,6 +996,15 @@ def persist_manifest(
                 (
                     extracted_by in DETERMINISTIC_ADMITTABLE_EXTRACTORS
                     and isinstance(kpi.locator, FactLocator)
+                    and (
+                        kpi.locator.effective_kind()
+                        in {
+                            LocatorKind.DERIVED,
+                            LocatorKind.FMP_JSON_TABLE,
+                            LocatorKind.SPREADSHEET_CELL,
+                        }
+                        or excerpt is not None
+                    )
                 )
                 or (
                     effective_nature is not KpiMetricNature.REPORTED_SCALAR

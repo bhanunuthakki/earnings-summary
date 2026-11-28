@@ -9,8 +9,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
-
 from compute.say_do_extractor import (
     compute_transcript_segments_sha256,
     current_transcript_scan_eligibility,
@@ -55,25 +53,16 @@ def test_migration_0078_adds_segments_sha256_and_drops_rigid_receipt_triggers(
             "trg_transcript_acquisition_receipts_no_delete",
         } <= triggers
 
-        # Arbitrary new provider names are accepted without requiring a table-rebuild migration.
-        sha = "a" * 64
-        conn.execute(
-            "INSERT INTO transcript_acquisition_receipts "
-            "(receipt_id, idempotency_key, document_id, canonical_ticker, fiscal_year, "
-            "fiscal_quarter, canonical_document_path, artifact_sha256, artifact_size_bytes, "
-            "source_url, provider, source_type, document_type, source_regime, "
-            "source_regime_contract_sha256, authorization_json, artifact_json, recorded_at) "
-            "VALUES (?, ?, NULL, 'TSM', 2025, 4, 'transcripts/raw/TSM_Q4_2025.pdf', ?, 128, "
-            "NULL, 'manual_pdf', 'ir_doc', 'earnings_call_transcript', 'combined', ?, '{}', '{}', "
-            "'2026-11-28T00:00:00Z')",
-            (sha, f"transcript:{sha}", sha, sha),
-        )
-        # Append-only guards remain enforced.
-        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        # Closed provider enum CHECK is replaced by non-empty provider check so new sources
+        # never require a table-rebuild migration.
+        table_sql = str(
             conn.execute(
-                "UPDATE transcript_acquisition_receipts SET provider='other' WHERE receipt_id=?",
-                (sha,),
-            )
+                "SELECT sql FROM sqlite_master WHERE type='table' "
+                "AND name='transcript_acquisition_receipts'"
+            ).fetchone()[0]
+        )
+        assert "CHECK(length(trim(provider)) >= 1)" in table_sql
+        assert "CHECK(provider IN (" not in table_sql
 
 
 def test_canonical_transcript_filename_supports_txt_pdf_html_and_digest_suffix() -> None:

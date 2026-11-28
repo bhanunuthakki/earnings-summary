@@ -9,10 +9,10 @@ Create Date: 2026-11-28
    row, enabling direct segment-hash scan tracking without a 1,300-LOC Merkle
    receipt ledger.
 2. Drops the three rigid ``BEFORE INSERT`` validation triggers (including the
-   18-argument Python UDF ``transcript_receipt_valid``) and removes closed-enum
-   ``CHECK(provider IN ...)`` / ``json_extract`` constraints from
-   ``transcript_acquisition_receipts`` while preserving all existing rows and
-   append-only update/delete guards.
+   18-argument Python UDF ``transcript_receipt_valid``) and replaces the closed
+   ``CHECK(provider IN (...))`` constraint on ``transcript_acquisition_receipts``
+   with a non-empty provider check while preserving all existing rows, indexes,
+   append-only update/delete guards, and clean reversibility to revision 0075.
 """
 
 from __future__ import annotations
@@ -29,10 +29,79 @@ down_revision = "0077_repair_google_finance_non_dec_fye_transcript_periods"
 branch_labels = None
 depends_on = None
 
-_RIGID_RECEIPT_TRIGGERS: tuple[str, ...] = (
-    "trg_transcript_acquisition_receipts_validate",
-    "trg_transcript_acquisition_receipts_stored_target_binding",
-    "trg_transcript_acquisition_receipts_document_binding",
+_OLD_PROVIDER_CHECK = (
+    "CHECK(provider IN ('issuer_ir', 'roic', 'stockanalysis', 'tickertrends',"
+    " 'google_finance_beta'))"
+)
+_NEW_PROVIDER_CHECK = "CHECK(length(trim(provider)) >= 1)"
+
+_RIGID_RECEIPT_TRIGGERS: tuple[tuple[str, str], ...] = (
+    (
+        "trg_transcript_acquisition_receipts_validate",
+        """
+        CREATE TRIGGER trg_transcript_acquisition_receipts_validate
+        BEFORE INSERT ON transcript_acquisition_receipts
+        BEGIN
+            SELECT CASE WHEN transcript_receipt_valid(
+                NEW.receipt_id, NEW.idempotency_key, NEW.document_id,
+                NEW.canonical_ticker, NEW.fiscal_year, NEW.fiscal_quarter,
+                NEW.canonical_document_path, NEW.artifact_sha256,
+                NEW.artifact_size_bytes, NEW.source_url, NEW.provider,
+                NEW.source_type, NEW.document_type, NEW.source_regime,
+                NEW.source_regime_contract_sha256, NEW.authorization_json,
+                NEW.artifact_json, NEW.recorded_at
+            ) != 1 THEN RAISE(ABORT, 'invalid transcript acquisition receipt') END;
+        END
+        """,
+    ),
+    (
+        "trg_transcript_acquisition_receipts_stored_target_binding",
+        """
+        CREATE TRIGGER trg_transcript_acquisition_receipts_stored_target_binding
+        BEFORE INSERT ON transcript_acquisition_receipts
+        WHEN (
+            SELECT COUNT(*) FROM tracked_companies AS tc
+            WHERE UPPER(tc.ticker) = NEW.canonical_ticker
+              AND tc.archived_at IS NULL
+              AND tc.list_type = json_extract(
+                  NEW.authorization_json,'$.stored_target.coverage_role'
+              )
+              AND (
+                  CASE
+                      WHEN tc.fiscal_year_end GLOB '[0-1][0-9]-[0-3][0-9]'
+                      THEN CAST(substr(tc.fiscal_year_end,1,2) AS INTEGER)
+                      ELSE NULL
+                  END
+              ) IS json_extract(
+                  NEW.authorization_json,'$.stored_target.fiscal_year_end_month'
+              )
+        ) != 1
+        BEGIN
+            SELECT RAISE(ABORT, 'transcript receipt does not match current stored target');
+        END
+        """,
+    ),
+    (
+        "trg_transcript_acquisition_receipts_document_binding",
+        """
+        CREATE TRIGGER trg_transcript_acquisition_receipts_document_binding
+        BEFORE INSERT ON transcript_acquisition_receipts
+        WHEN NEW.document_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM documents AS d
+            WHERE d.id = NEW.document_id
+              AND UPPER(d.ticker) = NEW.canonical_ticker
+              AND d.source_type = 'ir_doc'
+              AND d.doc_type = 'ir_transcript'
+              AND d.file_path = NEW.canonical_document_path
+              AND d.sha256 = NEW.artifact_sha256
+              AND d.raw_bytes_size = NEW.artifact_size_bytes
+              AND d.source_url IS NEW.source_url
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'transcript receipt does not match canonical document');
+        END
+        """,
+    ),
 )
 
 
@@ -99,71 +168,64 @@ def _upgrade_commitment_scan_log(connection: Connection) -> None:
             )
 
 
-def _relax_transcript_acquisition_receipts(connection: Connection) -> None:
+def _rebuild_receipts(connection: Connection, *, reverse: bool = False) -> None:
     if not _table_exists(connection, "transcript_acquisition_receipts"):
         return
-    for trigger_name in _RIGID_RECEIPT_TRIGGERS:
-        connection.exec_driver_sql(f"DROP TRIGGER IF EXISTS {trigger_name}")
+    schema = connection.exec_driver_sql(
+        "SELECT sql FROM sqlite_schema WHERE type='table' "
+        "AND name='transcript_acquisition_receipts'"
+    ).scalar_one()
+    if not isinstance(schema, str):
+        raise RuntimeError("transcript receipt schema is unavailable")
+    old_check, new_check = (
+        (_NEW_PROVIDER_CHECK, _OLD_PROVIDER_CHECK)
+        if reverse
+        else (_OLD_PROVIDER_CHECK, _NEW_PROVIDER_CHECK)
+    )
+    if schema.count(old_check) != 1:
+        raise RuntimeError("transcript receipt schema differs from expected predecessor")
+    updated_schema = schema.replace(old_check, new_check, 1)
+    prefix = "CREATE TABLE transcript_acquisition_receipts"
+    quoted_prefix = 'CREATE TABLE "transcript_acquisition_receipts"'
+    if updated_schema.startswith(quoted_prefix):
+        updated_schema = updated_schema.replace(
+            quoted_prefix, "CREATE TABLE transcript_acquisition_receipts_rebuild", 1
+        )
+    elif updated_schema.startswith(prefix):
+        updated_schema = updated_schema.replace(
+            prefix, "CREATE TABLE transcript_acquisition_receipts_rebuild", 1
+        )
+    else:
+        raise RuntimeError("transcript receipt table declaration differs from predecessor")
 
-    # Rebuild transcript_acquisition_receipts without closed-enum or json_extract CHECKs
-    # while keeping all existing rows, primary key, index, and append-only guards.
+    rigid_names = {name for name, _ in _RIGID_RECEIPT_TRIGGERS}
+    dependents = [
+        (str(row[0]), str(row[1]))
+        for row in connection.exec_driver_sql(
+            "SELECT name, sql FROM sqlite_schema WHERE tbl_name='transcript_acquisition_receipts' "
+            "AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name"
+        ).fetchall()
+    ]
     connection.exec_driver_sql("SAVEPOINT simplify_transcript_acquisition_receipts")
     try:
+        connection.exec_driver_sql(updated_schema)
         connection.exec_driver_sql(
-            """
-            CREATE TABLE transcript_acquisition_receipts_simplified (
-                receipt_id TEXT PRIMARY KEY,
-                idempotency_key TEXT NOT NULL,
-                document_id INTEGER REFERENCES documents(id),
-                canonical_ticker TEXT NOT NULL,
-                fiscal_year INTEGER NOT NULL,
-                fiscal_quarter INTEGER NOT NULL,
-                canonical_document_path TEXT NOT NULL,
-                artifact_sha256 TEXT NOT NULL,
-                artifact_size_bytes INTEGER NOT NULL,
-                source_url TEXT,
-                provider TEXT NOT NULL,
-                source_type TEXT NOT NULL,
-                document_type TEXT NOT NULL,
-                source_regime TEXT NOT NULL,
-                source_regime_contract_sha256 TEXT NOT NULL,
-                authorization_json TEXT NOT NULL,
-                artifact_json TEXT NOT NULL,
-                recorded_at TEXT NOT NULL
-            )
-            """
-        )
-        connection.exec_driver_sql(
-            "INSERT INTO transcript_acquisition_receipts_simplified "
-            "(receipt_id, idempotency_key, document_id, canonical_ticker, fiscal_year, "
-            "fiscal_quarter, canonical_document_path, artifact_sha256, artifact_size_bytes, "
-            "source_url, provider, source_type, document_type, source_regime, "
-            "source_regime_contract_sha256, authorization_json, artifact_json, recorded_at) "
-            "SELECT receipt_id, idempotency_key, document_id, canonical_ticker, fiscal_year, "
-            "fiscal_quarter, canonical_document_path, artifact_sha256, artifact_size_bytes, "
-            "source_url, provider, source_type, document_type, source_regime, "
-            "source_regime_contract_sha256, authorization_json, artifact_json, recorded_at "
-            "FROM transcript_acquisition_receipts"
+            "INSERT INTO transcript_acquisition_receipts_rebuild "
+            "SELECT * FROM transcript_acquisition_receipts"
         )
         connection.exec_driver_sql("DROP TABLE transcript_acquisition_receipts")
         connection.exec_driver_sql(
-            "ALTER TABLE transcript_acquisition_receipts_simplified "
+            "ALTER TABLE transcript_acquisition_receipts_rebuild "
             "RENAME TO transcript_acquisition_receipts"
         )
-        connection.exec_driver_sql(
-            "CREATE INDEX IF NOT EXISTS ix_transcript_acquisition_receipts_target "
-            "ON transcript_acquisition_receipts(idempotency_key, recorded_at, receipt_id)"
-        )
-        connection.exec_driver_sql(
-            "CREATE TRIGGER IF NOT EXISTS trg_transcript_acquisition_receipts_no_update "
-            "BEFORE UPDATE ON transcript_acquisition_receipts "
-            "BEGIN SELECT RAISE(ABORT, 'transcript acquisition receipts are append-only'); END"
-        )
-        connection.exec_driver_sql(
-            "CREATE TRIGGER IF NOT EXISTS trg_transcript_acquisition_receipts_no_delete "
-            "BEFORE DELETE ON transcript_acquisition_receipts "
-            "BEGIN SELECT RAISE(ABORT, 'transcript acquisition receipts are append-only'); END"
-        )
+        for name, statement in dependents:
+            if not reverse and name in rigid_names:
+                continue
+            connection.exec_driver_sql(statement)
+        if reverse:
+            for name, trigger_sql in _RIGID_RECEIPT_TRIGGERS:
+                if name not in {dep_name for dep_name, _ in dependents}:
+                    connection.exec_driver_sql(trigger_sql)
         for table in ("transcript_acquisition_receipts", "commitment_scan_receipts"):
             if (
                 _table_exists(connection, table)
@@ -181,9 +243,9 @@ def _relax_transcript_acquisition_receipts(connection: Connection) -> None:
 def upgrade() -> None:
     connection = op.get_bind()
     _upgrade_commitment_scan_log(connection)
-    _relax_transcript_acquisition_receipts(connection)
+    _rebuild_receipts(connection, reverse=False)
 
 
 def downgrade() -> None:
-    # Additive column + relaxed CHECK constraints are intentionally one-way safe.
-    pass
+    connection = op.get_bind()
+    _rebuild_receipts(connection, reverse=True)

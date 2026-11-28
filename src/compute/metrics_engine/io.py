@@ -63,7 +63,10 @@ from pipeline.kpi_semantics import (
     KpiUnitScale,
     persist_kpi_semantic_context,
 )
-from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+from pipeline.restatement_detector import (
+    find_same_doc_kpi_fact_id,
+    insert_kpi_with_restatement_detection,
+)
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
     DerivationInputV2,
@@ -1151,20 +1154,14 @@ def persist_attempt(
         )
         target_fact_id = new_id
         if target_fact_id is None:
-            existing_row = conn.execute(
-                "SELECT id FROM kpi_facts WHERE UPPER(ticker) = ? AND period_end = ? "
-                "AND fiscal_period_type = ? AND kpi_definition_id = ? AND source_doc_id = ? "
-                "ORDER BY id DESC LIMIT 1",
-                (
-                    ticker.upper(),
-                    period_end,
-                    fiscal_period_type,
-                    kpi_def_id,
-                    anchor_doc_id,
-                ),
-            ).fetchone()
-            if existing_row is not None:
-                target_fact_id = int(existing_row[0])
+            target_fact_id = find_same_doc_kpi_fact_id(
+                conn,
+                ticker=ticker,
+                period_end=period_end,
+                fiscal_period_type=fiscal_period_type,
+                kpi_definition_id=kpi_def_id,
+                source_doc_id=anchor_doc_id,
+            )
         if target_fact_id is not None:
             ensure_deterministic_kpi_semantic_context(
                 conn,

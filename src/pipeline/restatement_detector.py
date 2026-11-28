@@ -715,6 +715,27 @@ def _same_document_kpi_head(
     )
 
 
+def find_same_doc_kpi_fact_id(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: str,
+    kpi_definition_id: int,
+    source_doc_id: int,
+) -> int | None:
+    """Return the head ``kpi_facts.id`` for one ``(ticker, period, definition, source_doc)``."""
+    head = _same_document_kpi_head(
+        conn,
+        ticker=ticker,
+        period_end=period_end,
+        fiscal_period_type=fiscal_period_type,
+        kpi_definition_id=kpi_definition_id,
+        source_doc_id=source_doc_id,
+    )
+    return None if head is None else head.id
+
+
 def insert_kpi_with_restatement_detection(
     conn: sqlite3.Connection,
     *,
