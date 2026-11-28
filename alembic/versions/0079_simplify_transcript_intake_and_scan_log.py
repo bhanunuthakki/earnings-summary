@@ -1,7 +1,7 @@
 """Simplify transcript intake constraints and add segments_sha256 to commitment_scan_log.
 
-Revision ID: 0078_simplify_transcript_intake_and_scan_log
-Revises: 0077_repair_google_finance_non_dec_fye_transcript_periods
+Revision ID: 0079_simplify_transcript_intake_and_scan_log
+Revises: 0078_reconcile_qa_first_transcript_winners
 Create Date: 2026-11-28
 
 1. Adds ``segments_sha256 TEXT`` to ``commitment_scan_log`` and backfills it
@@ -24,8 +24,8 @@ from sqlalchemy.engine import Connection
 
 from alembic import op
 
-revision = "0078_simplify_transcript_intake_and_scan_log"
-down_revision = "0077_repair_google_finance_non_dec_fye_transcript_periods"
+revision = "0079_simplify_transcript_intake_and_scan_log"
+down_revision = "0078_reconcile_qa_first_transcript_winners"
 branch_labels = None
 depends_on = None
 

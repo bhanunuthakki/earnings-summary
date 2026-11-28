@@ -28,7 +28,7 @@ from transcripts.acquisition_semantics import (
 )
 
 
-def test_migration_0078_adds_segments_sha256_and_drops_rigid_receipt_triggers(
+def test_migration_0079_adds_segments_sha256_and_drops_rigid_receipt_triggers(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     db_path = migrated_db(tmp_path / "wave1.db")
