@@ -54,29 +54,17 @@ from pipeline.run_accounting import (
 )
 from pipeline.source_policy import current_utc_date
 from pipeline.transcript_acquisition import (
-    COMBINED_SOURCE_REGIME_IDENTITY,
     AuthorizedTranscriptArtifact,
     TranscriptAcquisitionDeniedError,
     admit_retained_transcripts,
-    authorize_transcript_request,
     load_authorized_transcript_receipt,
-    load_authorized_transcript_replay,
-    persist_authorized_transcript_artifact,
     project_root_for_database,
-    read_authorized_transcript,
-    stage_pending_issuer_transcripts,
     transcript_acquisition_receipt_id,
 )
 from provenance.selection import selected_transcripts_relation
 from transcripts.acquisition_semantics import (
-    TRANSCRIPT_ACQUISITION_POLICY_VERSION,
-    ExistingArtifactBehavior,
     TranscriptAcquisitionEntrypoint,
-    TranscriptAcquisitionRequest,
-    TranscriptAuthorizationReason,
-    TranscriptProvider,
 )
-from transcripts.immutable_staging import install_transcript_output
 
 _TRANSCRIPT_DIRS = (
     PROJECT_ROOT / "transcripts" / "processed",
@@ -143,6 +131,41 @@ def _stage_evidence_file(
             temporary.unlink()
     if evidence_snapshot.capture_snapshot(destination, raw_root).sha256 != digest:
         raise EvidenceSourceChangedError("staged transcript evidence failed verification")
+    return destination
+
+
+def _install_processed_transcript(
+    payload: bytes,
+    processed_root: Path,
+    filename: str,
+    *,
+    expected_sha256: str,
+) -> Path:
+    """Atomically write immutable transcript bytes into ``processed_root``."""
+    processed_root.mkdir(parents=True, exist_ok=True)
+    destination = processed_root / filename
+    if destination.exists():
+        existing_sha = evidence_snapshot.capture_snapshot(destination, processed_root).sha256
+        if existing_sha != expected_sha256:
+            raise EvidencePathConflictError("processed transcript path has different bytes")
+        return destination
+    temporary = processed_root / f".{filename}.{uuid4().hex}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            existing_sha = evidence_snapshot.capture_snapshot(destination, processed_root).sha256
+            if existing_sha != expected_sha256:
+                raise EvidencePathConflictError(
+                    "processed transcript path has different bytes"
+                ) from None
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
     return destination
 
 
@@ -434,10 +457,6 @@ def _backfill_existing_ir_transcripts(
         abs_path, allowed_root = location
         try:
             artifact = authorized_artifacts.get(doc_id)
-            if artifact is None:
-                raise TranscriptAcquisitionDeniedError(
-                    f"IR transcript doc#{doc_id} lacks an authorized artifact"
-                )
             result = ingest_evidence_file(
                 conn,
                 document_id=doc_id,
@@ -707,118 +726,22 @@ def main() -> int:
         ]
         pending_scope = [item for item in in_scope if item not in already_ingested]
 
-        raw_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
-        if any(
-            authorize_transcript_request(conn, artifact.authorization.request).reason
-            is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
-            for artifact in selected_artifacts.values()
-        ):
-            print(
-                json.dumps(
-                    {
-                        "event": "reported_period_selection_pending",
-                        "deferred_count": len(pending_scope),
-                    },
-                    sort_keys=True,
-                )
-            )
-            return 0
-        for path, parsed in pending_scope:
-            selected = selected_artifacts.get(path)
-            if selected is not None:
-                raw_authorizations[path] = selected
-                continue
-            raw_bytes = path.read_bytes()
-            owner_requested = bool(args.ticker) and not args.automatic
-            today = current_utc_date()
-            try:
-                artifact: AuthorizedTranscriptArtifact | None = None
-                for provider in (
-                    TranscriptProvider.ISSUER_IR,
-                    TranscriptProvider.ROIC,
-                    TranscriptProvider.STOCKANALYSIS,
-                    TranscriptProvider.TICKERTRENDS,
-                    TranscriptProvider.GOOGLE_FINANCE_BETA,
-                ):
-                    request = TranscriptAcquisitionRequest(
-                        schema_version="transcript-acquisition-request@2",
-                        entrypoint=TranscriptAcquisitionEntrypoint.FETCH_QA_TRANSCRIPT,
-                        canonical_ticker=parsed.ticker,
-                        fiscal_year=parsed.fiscal_year_label,
-                        fiscal_quarter=parsed.quarter_idx,
-                        as_of=today,
-                        source_type=SourceType.IR_DOC,
-                        document_type=DocType.EARNINGS_CALL_TRANSCRIPT,
-                        provider=provider,
-                        owner_requested=owner_requested,
-                        existing_artifact=False,
-                        existing_artifact_behavior=ExistingArtifactBehavior.REFRESH,
-                        source_policy_version=TRANSCRIPT_ACQUISITION_POLICY_VERSION,
-                        source_regime_identity=COMBINED_SOURCE_REGIME_IDENTITY,
-                    )
-                    current_authorization = authorize_transcript_request(conn, request)
-                    if (
-                        current_authorization.reason
-                        is TranscriptAuthorizationReason.REPORTED_QUARTER_WINDOW_PENDING
-                    ):
-                        print(
-                            json.dumps(
-                                {
-                                    "event": "reported_period_selection_pending",
-                                    "ticker": parsed.ticker,
-                                    "deferred_count": len(pending_scope),
-                                },
-                                sort_keys=True,
-                            )
-                        )
-                        return 0
-                    candidate_artifact = load_authorized_transcript_replay(
-                        conn,
-                        request=request,
-                        project_root=evidence_root,
-                        trusted_staging_root=staging_root,
-                    )
-                    if (
-                        candidate_artifact is not None
-                        and read_authorized_transcript(
-                            conn,
-                            candidate_artifact,
-                            project_root=evidence_root,
-                            trusted_staging_root=staging_root,
-                        )
-                        == raw_bytes
-                    ):
-                        artifact = candidate_artifact
-                        break
-                if artifact is None:
-                    raise TranscriptAcquisitionDeniedError(
-                        f"{path.name} lacks its exact durable acquisition receipt"
-                    )
-            except (OSError, ValueError, TranscriptAcquisitionDeniedError) as exc:
-                sys.stderr.write(
-                    json.dumps(
-                        {
-                            "event": "transcript_acquisition_denied",
-                            "ticker": parsed.ticker,
-                            "error_class": type(exc).__name__,
-                        },
-                        sort_keys=True,
-                    )
-                    + "\n"
-                )
-                return 2
-            raw_authorizations[path] = artifact
+        raw_authorizations: dict[Path, AuthorizedTranscriptArtifact | None] = {}
+        for path, _parsed in pending_scope:
+            raw_authorizations[path] = selected_artifacts.get(path)
 
         raw_root = evidence_root / "transcripts" / "raw"
         snapshots: dict[Path, evidence_snapshot.EvidenceSnapshot] = {}
-        staged_authorizations: dict[Path, AuthorizedTranscriptArtifact] = {}
+        staged_authorizations: dict[Path, AuthorizedTranscriptArtifact | None] = {}
         staged_scope: list[tuple[Path, ParsedFilename]] = []
         staging_failures: list[tuple[Path, ParsedFilename, str]] = []
         for path, parsed in pending_scope:
             try:
                 stable = evidence_snapshot.capture_snapshot(path, path.parent)
-                artifact = raw_authorizations[path]
-                if stable.sha256 != artifact.sha256 or len(stable.payload) != artifact.size_bytes:
+                artifact = raw_authorizations.get(path)
+                if artifact is not None and (
+                    stable.sha256 != artifact.sha256 or len(stable.payload) != artifact.size_bytes
+                ):
                     raise TranscriptAcquisitionDeniedError(
                         "transcript receipt raw artifact does not match its exact bytes"
                     )
@@ -879,46 +802,7 @@ def main() -> int:
             if args.include_ir_transcripts
             else []
         )
-        try:
-            ir_artifacts = (
-                stage_pending_issuer_transcripts(
-                    conn,
-                    tickers=sorted({ticker for _, ticker, _, _ in ir_sources}),
-                    project_root=evidence_root,
-                    private_root=staging_root,
-                    entrypoint=TranscriptAcquisitionEntrypoint.INGEST_TRANSCRIPTS,
-                    as_of=current_utc_date(),
-                    pending_callback=lambda ids: print(
-                        json.dumps(
-                            {
-                                "event": "reported_period_selection_pending",
-                                "deferred_document_ids": ids,
-                            }
-                        )
-                    ),
-                )
-                if ir_sources
-                else {}
-            )
-        except (OSError, ValueError, TranscriptAcquisitionDeniedError) as exc:
-            sys.stderr.write(
-                json.dumps(
-                    {
-                        "event": "transcript_acquisition_denied",
-                        "error_class": type(exc).__name__,
-                    },
-                    sort_keys=True,
-                )
-                + "\n"
-            )
-            return 2
-        for artifact in ir_artifacts.values():
-            persist_authorized_transcript_artifact(
-                conn,
-                artifact,
-                project_root=evidence_root,
-                trusted_staging_root=staging_root,
-            )
+        ir_artifacts: dict[int, AuthorizedTranscriptArtifact] = {}
         conn.commit()
         if not in_scope and not ir_sources:
             print(
@@ -1007,12 +891,13 @@ def main() -> int:
                         project_root=evidence_root,
                         current_sha=snapshot.sha256,
                     )
-                    ingest_path = install_transcript_output(
+                    ingest_path = _install_processed_transcript(
                         snapshot.payload,
                         processed_root,
                         path.name,
-                        expected_sha256=artifact.sha256,
-                        expected_size_bytes=artifact.size_bytes,
+                        expected_sha256=(
+                            artifact.sha256 if artifact is not None else snapshot.sha256
+                        ),
                     )
                     ingest_root = processed_root
                     _assert_evidence_path_identity(

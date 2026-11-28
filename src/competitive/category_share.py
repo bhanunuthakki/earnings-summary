@@ -28,27 +28,16 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from competitive._docs import ensure_synthetic_document
 from models.documents import SourceType
-from models.facts import Currency, FiscalPeriodType, LegacyEscapeHatch, Unit
+from models.facts import Currency, FactLocator, FiscalPeriodType, Unit
 from models.kpis import ReportingCadence
 from models.runs import StageStatus
 from pipeline.invocation_fingerprint import file_fingerprint
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
+from pipeline.kpi_semantics import KpiUnitScale
 from pipeline.run_accounting import end_run, start_run
 
 _DOC_TYPE = "competitive_category_share"
 _EXTRACTED_BY = "competitive_category_share"
-
-# Analyst-curated seed entries (Gartner MQ / IDC placement) cite a published
-# report by name/year (see _excerpt below) but have no JSON/PDF position in
-# this repo's document store to anchor a FactLocator to.
-_NO_LOCATOR = LegacyEscapeHatch(
-    reason=(
-        "analyst-curated competitive-share seed entry cites a published "
-        "3rd-party report (Gartner MQ / IDC) with no cached JSON/PDF "
-        "artifact in this repo to anchor a locator to -- source_excerpt "
-        "carries the citation instead"
-    )
-)
 
 
 class CategoryShareEntry(BaseModel):
@@ -162,10 +151,14 @@ def ingest_category_share(conn: sqlite3.Connection, repo_root: Path, ticker: str
                     name=e.metric,
                     value=cast("Decimal", e.value),
                     unit=e.unit,
+                    unit_scale=KpiUnitScale.NONE if e.unit is Unit.COUNT else None,
                     currency=e.currency,
                     confidence=1.0,
                     source_excerpt=_excerpt(e),
-                    locator=_NO_LOCATOR,
+                    locator=FactLocator(
+                        section="category_share_yaml",
+                        verbatim_snippet=_excerpt(e),
+                    ),
                 )
                 for e in entries
             ]

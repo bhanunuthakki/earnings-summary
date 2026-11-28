@@ -28,11 +28,13 @@ from models.documents import SourceType
 from models.facts import Currency, FactLocator, Unit
 from models.kpis import DefinitionOrigin
 from pipeline import locators
+from pipeline.kpi_atomic_admission import ensure_deterministic_kpi_semantic_context
 from pipeline.kpi_persistence import (
     KpiValue,
     find_or_create_kpi_definition,
 )
 from pipeline.restatement_detector import (
+    find_same_doc_kpi_fact_id,
     insert_kpi_with_restatement_detection,
     insert_with_restatement_detection,
 )
@@ -996,6 +998,29 @@ def persist_fpi_facts(
                 locator=loc_str,
                 source_excerpt=kpv.source_excerpt,
             )
+            target_kpi_id = new_kpi_id
+            if target_kpi_id is None:
+                target_kpi_id = find_same_doc_kpi_fact_id(
+                    conn,
+                    ticker=ticker,
+                    period_end=period_end,
+                    fiscal_period_type=fiscal_period_type.upper(),
+                    kpi_definition_id=kpi_def_id,
+                    source_doc_id=doc_id,
+                )
+            if target_kpi_id is not None:
+                ensure_deterministic_kpi_semantic_context(
+                    conn,
+                    kpi_fact_id=target_kpi_id,
+                    metric_name=kpv.name,
+                    period_end=period_end.date(),
+                    value=kpv.value,
+                    unit=kpv.unit,
+                    extracted_by="sec_fpi_ingest@1",
+                    locator=kpv.locator,
+                    source_excerpt=kpv.source_excerpt,
+                    reviewed_by="deterministic:sec_fpi_ingest@1",
+                )
             if new_kpi_id is not None or force:
                 kpi_inserted += 1
 

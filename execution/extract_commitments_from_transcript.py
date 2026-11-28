@@ -71,6 +71,7 @@ from compute.say_do import (
 )
 from compute.say_do_extractor import (
     TranscriptExtractionManifest,
+    current_transcript_scan_eligibility,
     extract_for_transcript,
     record_scan,
     scan_log_schema_available,
@@ -80,10 +81,6 @@ from compute.say_do_extractor import (
 )
 from llm.prompt_versions import prompt_version_for
 from llm_client import call_llm, is_hard_stop
-from pipeline.commitment_scan_receipts import (
-    current_transcript_scan_binding,
-    scan_receipt_schema_available,
-)
 from pipeline.queries import open_db
 from provenance.selection import selected_transcripts_relation
 
@@ -224,13 +221,10 @@ def _run_auto(
     version = prompt_version_for(PURPOSE)
     for tid, tk in targets:
         try:
-            if not scan_receipt_schema_available(conn):
-                raise RuntimeError("commitment scan segment manifest schema is unavailable")
             if not scan_log_schema_available(conn):
                 raise RuntimeError("commitment scan log schema is unavailable")
-            initial_binding = current_transcript_scan_binding(conn, tid)
-            if initial_binding is None:
-                raise ValueError("current transcript lacks exact authorized acquisition evidence")
+            if current_transcript_scan_eligibility(conn, tid) is None:
+                raise ValueError("current transcript lacks source document or transcript segments")
             scan_result = extract_for_transcript(conn, tid, llm_call=_governed_llm_call(tk))
         except Exception as e:  # surface in report rather than abort the batch
             if is_hard_stop(e):
@@ -279,7 +273,6 @@ def _run_auto(
                 commitment_ids=ids,
                 management_indicator_ids=indicator_ids,
                 observed_segments=scan_result.observed_segments,
-                expected_binding=initial_binding,
             )
             conn.commit()
         except Exception as e:

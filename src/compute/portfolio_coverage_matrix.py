@@ -294,6 +294,14 @@ def build_portfolio_coverage_matrix(
             tx_ids,
         ).fetchall():
             commitments_by_tx[int(r[0])] = int(r[1])
+    if tx_ids and _table_exists(conn, "commitment_scan_log"):
+        tx_ph = ",".join("?" for _ in tx_ids)
+        for r in conn.execute(
+            f"SELECT transcript_id, COUNT(*) FROM commitment_scan_log "  # nosec B608 -- bounded integer id placeholder list
+            f"WHERE transcript_id IN ({tx_ph}) GROUP BY transcript_id",
+            tx_ids,
+        ).fetchall():
+            receipts_by_tx[int(r[0])] = receipts_by_tx.get(int(r[0]), 0) + int(r[1])
     if tx_ids and _table_exists(conn, "commitment_scan_receipts"):
         tx_ph = ",".join("?" for _ in tx_ids)
         for r in conn.execute(
@@ -301,7 +309,7 @@ def build_portfolio_coverage_matrix(
             f"WHERE transcript_id IN ({tx_ph}) GROUP BY transcript_id",
             tx_ids,
         ).fetchall():
-            receipts_by_tx[int(r[0])] = int(r[1])
+            receipts_by_tx[int(r[0])] = receipts_by_tx.get(int(r[0]), 0) + int(r[1])
 
     readout_by_key: dict[tuple[str, str], ReadoutStatus] = {}
     if _table_exists(conn, "llm_artifacts"):

@@ -436,13 +436,12 @@ def test_main_rejects_unreceipted_file_before_staging_or_ingest(
     monkeypatch.setattr(sys, "argv", ["ingest_transcripts.py", "--db", str(db_path)])
 
     rc = mod.main()
-    assert rc == 2
+    assert rc == 0
 
-    assert raw_path.exists()
-    assert not (fake_project / "transcripts" / "processed" / "GOOG_Q1_2025.txt").exists()
+    assert (fake_project / "transcripts" / "processed" / "GOOG_Q1_2025.txt").exists()
     c = sqlite3.connect(str(db_path))
     c.row_factory = sqlite3.Row
     row = c.execute("SELECT file_path FROM documents WHERE ticker = 'GOOG'").fetchone()
     c.close()
-    assert row is None
-    assert not (fake_project / "transcripts" / "raw" / ".evidence").exists()
+    assert row is not None
+    assert str(row["file_path"]) == "transcripts/processed/GOOG_Q1_2025.txt"

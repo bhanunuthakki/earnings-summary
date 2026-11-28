@@ -9,7 +9,8 @@ Provides the single qualification builder shared by atomic manifest ingestion
 from __future__ import annotations
 
 import re
-from datetime import date
+import sqlite3
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Final
@@ -25,8 +26,10 @@ from pipeline.kpi_semantics import (
     KpiSemanticStatus,
     KpiSourcePrecision,
     KpiUnitScale,
+    current_kpi_semantic_context,
     normalize_source_numeric,
     parse_source_numeric,
+    persist_kpi_semantic_context,
     validate_admitted_unit_scale,
 )
 
@@ -342,6 +345,77 @@ def build_atomic_semantic_context(
         source_precision=resolved_precision,
         status=KpiSemanticStatus.ADMITTED,
         reason_code=None,
+    )
+
+
+def ensure_deterministic_kpi_semantic_context(
+    conn: sqlite3.Connection,
+    *,
+    kpi_fact_id: int,
+    metric_name: str,
+    period_end: date,
+    value: Decimal,
+    unit: Unit,
+    extracted_by: str,
+    locator: FactLocator | LegacyEscapeHatch | None = None,
+    reviewed_by: str | None = None,
+    source_excerpt: str | None = None,
+    knowledge_at: datetime | None = None,
+) -> int | None:
+    """Stamp an ``ADMITTED`` semantic context if the fact has none or ``legacy_unknown``.
+
+    Safe for both fresh inserts and idempotent replays. Never overrides an
+    existing ``admitted`` or ``quarantined`` disposition.
+    """
+    existing = current_kpi_semantic_context(conn, kpi_fact_id=kpi_fact_id)
+    if existing is not None and existing.context.status in {
+        KpiSemanticStatus.ADMITTED,
+        KpiSemanticStatus.QUARANTINED,
+    }:
+        return existing.id
+
+    reported_label = normalize_reported_metric_label(metric_name)
+    if not reported_label:
+        return None
+    if isinstance(locator, FactLocator):
+        context = build_atomic_semantic_context(
+            metric_name=reported_label,
+            period_end=period_end,
+            value=value,
+            unit=unit,
+            extracted_by=extracted_by,
+            locator=locator,
+            source_excerpt=source_excerpt,
+        )
+    else:
+        resolved_scale, resolved_token = _resolve_unit_scale_and_token(
+            value=value,
+            unit=unit,
+            source_excerpt=source_excerpt,
+            source_value_text=None,
+            unit_scale=KpiUnitScale.NONE if unit is Unit.COUNT else None,
+            metric_nature=KpiMetricNature.REPORTED_SCALAR,
+        )
+        context = KpiSemanticContext(
+            metric_name_as_reported=reported_label,
+            reported_period_end=period_end,
+            period_role=KpiPeriodRole.CURRENT,
+            publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+            accounting_basis=infer_default_accounting_basis(reported_label, {extracted_by}),
+            consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+            dimensions={},
+            unit_scale=resolved_scale,
+            source_value_text=resolved_token,
+            status=KpiSemanticStatus.ADMITTED,
+            reason_code=None,
+        )
+    return persist_kpi_semantic_context(
+        conn,
+        kpi_fact_id=kpi_fact_id,
+        context=context,
+        reviewed_by=reviewed_by or f"deterministic:{extracted_by}",
+        knowledge_at=knowledge_at or datetime.now(UTC),
+        kpi_definition_revision_id=None,
     )
 
 
