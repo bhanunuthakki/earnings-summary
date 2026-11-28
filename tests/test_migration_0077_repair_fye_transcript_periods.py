@@ -19,28 +19,28 @@ _REPAIRS: tuple[tuple[str, str, str, str, str], ...] = (
     (
         "BIRK",
         "Q3",
-        "db07a4baa7296844773e934c230a292b1d7f5852cd29ec00ca1f3bd326034222",
+        "db07a4baa7296844773e934c230a292b1d7f5852cd29ec00ca1f3bd326034222",  # pragma: allowlist secret
         "2026-09-30 00:00:00",
         "2026-06-30 00:00:00",
     ),
     (
         "TJX",
         "Q3",
-        "880077dbc9f5d79dce93db440677517e356b76899bef9239d7463b2abeb78dfe",
+        "880077dbc9f5d79dce93db440677517e356b76899bef9239d7463b2abeb78dfe",  # pragma: allowlist secret
         "2027-09-30 00:00:00",
         "2026-10-31 00:00:00",
     ),
     (
         "TWST",
         "Q4",
-        "510c70fbf15ecfefa844d2259e929a80bc65fbd844ce8c6a4cdf01121281be0e",
+        "510c70fbf15ecfefa844d2259e929a80bc65fbd844ce8c6a4cdf01121281be0e",  # pragma: allowlist secret
         "2026-12-31 00:00:00",
         "2026-09-30 00:00:00",
     ),
     (
         "VFC",
         "Q2",
-        "157b4d871e944d437a35638d255f86ddd14ac5779a12ec5b47664b5e1bb03dda",
+        "157b4d871e944d437a35638d255f86ddd14ac5779a12ec5b47664b5e1bb03dda",  # pragma: allowlist secret
         "2027-06-30 00:00:00",
         "2026-09-30 00:00:00",
     ),
