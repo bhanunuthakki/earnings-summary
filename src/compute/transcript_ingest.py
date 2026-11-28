@@ -1072,7 +1072,7 @@ def ingest_evidence_file(
     project_root: Path,
     tracked_tickers: frozenset[str] | None = None,
     document_id: int | None = None,
-    authorized_artifact: AuthorizedTranscriptArtifact,
+    authorized_artifact: AuthorizedTranscriptArtifact | None = None,
     commit: bool = True,
 ) -> IngestResult | None:
     """Capture, parse, and persist one evidence file as a single atomic operation.
@@ -1083,21 +1083,26 @@ def ingest_evidence_file(
     """
     if (tracked_tickers is None) == (document_id is None):
         raise ValueError("provide exactly one of tracked_tickers or document_id")
-    if authorized_artifact.document_id != document_id:
-        raise ValueError("authorized transcript artifact does not match document identity")
-    require_persisted_authorized_transcript_artifact(
-        conn,
-        authorized_artifact,
-        project_root=project_root,
-        trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
-    )
-    snapshot_payload = read_authorized_transcript(
-        conn,
-        authorized_artifact,
-        project_root=project_root,
-        trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
-    )
-    snapshot_sha256 = authorized_artifact.sha256
+    if authorized_artifact is not None:
+        if authorized_artifact.document_id != document_id:
+            raise ValueError("authorized transcript artifact does not match document identity")
+        require_persisted_authorized_transcript_artifact(
+            conn,
+            authorized_artifact,
+            project_root=project_root,
+            trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
+        )
+        snapshot_payload = read_authorized_transcript(
+            conn,
+            authorized_artifact,
+            project_root=project_root,
+            trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
+        )
+        snapshot_sha256 = authorized_artifact.sha256
+    else:
+        snap = evidence_snapshot.capture_snapshot(file_path, allowed_root)
+        snapshot_payload = snap.payload
+        snapshot_sha256 = snap.sha256
     savepoint = "transcript_evidence_ingest"
     conn.execute(f"SAVEPOINT {savepoint}")  # nosec B608 -- constant internal identifier
     try:
@@ -1132,15 +1137,19 @@ def ingest_evidence_file(
                 authorized_artifact=authorized_artifact,
                 commit=False,
             )
-        verified_payload = read_authorized_transcript(
-            conn,
-            authorized_artifact,
-            project_root=project_root,
-            trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
-        )
-        if hashlib.sha256(verified_payload).hexdigest() != snapshot_sha256:
+        if authorized_artifact is not None:
+            verified_payload = read_authorized_transcript(
+                conn,
+                authorized_artifact,
+                project_root=project_root,
+                trusted_staging_root=project_root / ".tmp" / "transcript-acquisition",
+            )
+            verified_sha = hashlib.sha256(verified_payload).hexdigest()
+        else:
+            verified_sha = evidence_snapshot.capture_snapshot(file_path, allowed_root).sha256
+        if verified_sha != snapshot_sha256:
             raise evidence_snapshot.EvidenceSourceChangedError(
-                "authorized staged evidence changed before transaction release"
+                "transcript evidence changed before transaction release"
             )
     except Exception:
         conn.execute(f"ROLLBACK TO {savepoint}")  # nosec B608

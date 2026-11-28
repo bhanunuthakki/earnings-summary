@@ -346,12 +346,26 @@ def test_transcripts_pending_degrades_without_scan_log_table(
     assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
 
 
-def test_record_scan_requires_exact_receipt_schema(conn: sqlite3.Connection) -> None:
+def test_record_scan_tracks_segments_sha256_without_receipt_table(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute("ALTER TABLE commitment_scan_log ADD COLUMN segments_sha256 TEXT")
     _seed_kpi_def(conn, "AMZN", "X")
-    tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
-    with pytest.raises(RuntimeError, match="segment manifest schema"):
-        record_scan(conn, tid, n_extracted=0, prompt_version="v1")
-    assert conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0] == 0
+    tid, seg_id = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+    from llm.prompt_versions import prompt_version_for
+
+    version = prompt_version_for("saydo_commitment_extract")
+    assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
+    record_scan(conn, tid, n_extracted=0, prompt_version=version)
+    row = conn.execute(
+        "SELECT prompt_version, segments_sha256 FROM commitment_scan_log WHERE transcript_id=?",
+        (tid,),
+    ).fetchone()
+    assert row is not None and row["prompt_version"] == version and row["segments_sha256"]
+    assert transcripts_pending_extraction(conn) == []
+    # Changing segment bytes invalidates the scan hash and re-queues the transcript.
+    conn.execute("UPDATE transcript_segments SET text='updated text' WHERE id=?", (seg_id,))
+    assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
 
 
 # ---------------------------------------------------------------------------
@@ -613,11 +627,15 @@ def test_extract_retries_novel_indicator_with_unbound_source_excerpt(
     assert manifest.indicators[0].source_excerpt == "We launched 42 new enterprise pilots."
 
 
-def test_extract_rejects_novel_indicator_after_two_unbound_source_excerpts(
+def test_extract_isolates_unbound_novel_indicator_after_retry_preserving_commitments(
     conn: sqlite3.Connection,
 ) -> None:
+    _seed_kpi_def(conn, "ZZZ", "Revenue Growth", "percent")
     transcript_id, _ = _seed_transcript(
-        conn, "ZZZ", "We launched 42 new enterprise pilots.", "2025-12-31"
+        conn,
+        "ZZZ",
+        "We expect Revenue Growth of at least 15% and launched 42 pilots.",
+        "2025-12-31",
     )
     calls = 0
 
@@ -625,7 +643,14 @@ def test_extract_rejects_novel_indicator_after_two_unbound_source_excerpts(
         nonlocal calls
         calls += 1
         return """{
-          "commitments": [],
+          "commitments": [{
+            "kpi_name": "Revenue Growth",
+            "comparator": "ge",
+            "target_value": "15",
+            "unit": "percent",
+            "period_target": "2026-03-31",
+            "narrative": "We expect Revenue Growth of at least 15%."
+          }],
           "novel_indicators": [{
             "raw_label": "New enterprise pilots",
             "value": "42",
@@ -636,9 +661,11 @@ def test_extract_rejects_novel_indicator_after_two_unbound_source_excerpts(
           }]
         }"""
 
-    with pytest.raises(CommitmentParseError, match="failed exact segment binding"):
-        extract_for_transcript(conn, transcript_id, llm_call=stub_llm)
+    manifest = extract_for_transcript(conn, transcript_id, llm_call=stub_llm)
     assert calls == 2
+    assert len(manifest.commitments) == 1
+    assert manifest.commitments[0].kpi_name == "Revenue Growth"
+    assert manifest.indicators == []
 
 
 def test_extract_retries_once_with_feedback_then_succeeds(
@@ -811,17 +838,7 @@ def test_run_auto_unbound_indicator_after_retry_records_no_scan(
     )
 
     def stub_call_llm(prompt: str, **kwargs: object) -> str:
-        return """{
-          "commitments": [],
-          "novel_indicators": [{
-            "raw_label": "New enterprise pilots",
-            "value": "42",
-            "unit": "count",
-            "scope": "product",
-            "recurrence": "one_off",
-            "source_excerpt": "We started forty-two enterprise pilots."
-          }]
-        }"""
+        return "not valid json at all"
 
     monkeypatch.setattr(mod, "call_llm", stub_call_llm)
     report = mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=False)

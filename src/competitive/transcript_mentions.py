@@ -45,27 +45,16 @@ from compute.transcript_ingest import (
     read_transcript_text,
 )
 from models.documents import SourceType
-from models.facts import LegacyEscapeHatch, Unit
+from models.facts import FactLocator, Unit
 from models.runs import StageStatus
 from pipeline.invocation_fingerprint import files_fingerprint
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
+from pipeline.kpi_semantics import KpiUnitScale
 from pipeline.run_accounting import end_run, start_run
 
 _DOC_TYPE = "competitive_transcript_mentions"
 _EXTRACTED_BY = "competitive_transcript_mentions"
 _MAX_EXAMPLES = 3  # example snippets kept per signal for the fact's source_excerpt
-
-# Each fact here is an AGGREGATE count of mentions across an entire transcript
-# (module docstring above) -- there is no single line/turn a count of "3
-# mentions" can point at, so no transcript_span locator applies; the matched
-# sentence examples are captured separately in source_excerpt.
-_NO_LOCATOR = LegacyEscapeHatch(
-    reason=(
-        "mention count is aggregated across the full transcript, not a "
-        "single quote/line -- no one transcript_line anchors an aggregate "
-        "count (matched sentence examples are in source_excerpt instead)"
-    )
-)
 
 # --- Named competitors (canonical -> aliases, each alias list LONGEST-FIRST so
 # "Dell PowerProtect" counts as one Dell mention, not Dell + PowerProtect). ---- #
@@ -292,9 +281,13 @@ def extract_for_ticker(
                     name=metric,
                     value=Decimal(count),
                     unit=Unit.COUNT,
+                    unit_scale=KpiUnitScale.NONE,
                     confidence=1.0,
                     source_excerpt=_excerpt_for(metric, counts),
-                    locator=_NO_LOCATOR,
+                    locator=FactLocator(
+                        section="transcript_mentions",
+                        verbatim_snippet=_excerpt_for(metric, counts),
+                    ),
                 )
                 for metric, count in metric_values.items()
             ]

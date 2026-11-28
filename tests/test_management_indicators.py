@@ -227,3 +227,55 @@ def test_indicator_resolves_the_exact_supporting_segment() -> None:
         assert json.loads(row["source_locator_json"])["segment_sequence"] == 4
     finally:
         conn.close()
+
+
+def test_indicator_matches_pdf_kerning_and_adjacent_segment() -> None:
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO transcript_segments VALUES (13, 4, 5, 'CFO', '00:18:10', ?)",
+        (
+            "We expect to make targeted reinvestm ents \nacross the organization of about $170 million in 2025.",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO transcript_segments VALUES (14, 4, 6, 'CEO', '00:19:00', ?)",
+        ("Our AI-native re-\nplatforming saved 22 million hours in Q1.",),
+    )
+    try:
+        kerning_ind = ManagementIndicatorInput(
+            ticker="ACME",
+            transcript_segment_id=13,
+            raw_label="Targeted reinvestments",
+            value=Decimal("170"),
+            unit=Unit.MILLIONS,
+            scope=IndicatorScope.CONSOLIDATED,
+            recurrence=IndicatorRecurrence.ONE_OFF,
+            source_excerpt=(
+                "We expect to make targeted reinvestments across the organization "
+                "of about $170 million in 2025."
+            ),
+        )
+        ind_id = persist_indicator(conn, indicator=kerning_ind)
+        assert ind_id > 0
+
+        # Anchored 1 segment off (segment 13 instead of 14) + PDF line-break hyphenation
+        adj_ind = ManagementIndicatorInput(
+            ticker="ACME",
+            transcript_segment_id=13,
+            raw_label="AI-native replatforming hours saved",
+            value=Decimal("22"),
+            unit=Unit.MILLIONS,
+            scope=IndicatorScope.CONSOLIDATED,
+            recurrence=IndicatorRecurrence.ONE_OFF,
+            source_excerpt="Our AI-native replatforming saved 22 million hours in Q1.",
+        )
+        adj_id = persist_indicator(conn, indicator=adj_ind)
+        row = conn.execute(
+            "SELECT transcript_segment_id, speaker FROM management_indicator_observations WHERE id=?",
+            (adj_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["transcript_segment_id"] == 14
+        assert row["speaker"] == "CEO"
+    finally:
+        conn.close()

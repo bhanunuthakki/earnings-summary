@@ -1,5 +1,14 @@
 # Operations & Governance Surface Impact
 
+## Simplified transcript intake, scan log, indicator isolation & unified KPI auto-admission (Wave 1) — November 27, 2026
+
+Disposition: **database migration `0078_simplify_transcript_intake_and_scan_log` and internal pipeline simplification; no new dashboard route, panel, scheduler task, or service**.
+- Migration `0078_simplify_transcript_intake_and_scan_log` adds `segments_sha256` to `commitment_scan_log` (backfilling verified scans) and drops the three rigid `BEFORE INSERT` validation triggers and closed-enum `CHECK` constraints on `transcript_acquisition_receipts` while preserving existing rows and append-only update/delete guards.
+- Transcript intake (`transcripts.acquisition_semantics`, `execution/ingest_transcripts.py`, `execution/audit_quarterly_data_coverage.py`) accepts `.txt`, `.pdf`, and `.html` artifacts directly without requiring pre-existing `transcript_acquisition_receipts` rows; commitment scan eligibility (`compute.say_do_extractor`, `execution/extract_commitments_from_transcript.py`, `execution/audit_commitment_scan_evidence.py`, `compute.portfolio_coverage_matrix`) binds directly to `documents` + `transcript_segments` + `commitment_scan_log.segments_sha256`.
+- `compute.management_indicators` adds PDF-aware normalization (`NFKC`, line-break de-hyphenation, whitespace-collapsed matching) and ±1 adjacent-segment re-anchoring; `compute.say_do_extractor.extract_for_transcript` isolates ungrounded staging indicators after retry instead of discarding valid catalog commitments.
+- All deterministic KPI write paths (`pipeline.kpi_persistence`, `pipeline.kpi_atomic_admission.ensure_deterministic_kpi_semantic_context`, `ir_pipeline.ingest`, `compute.metrics_engine.io`, `compute.fmp_derived_kpis`, `pipeline.sec_fpi_ingest`, `pipeline.issuer_fact_manifest`) stamp `ADMITTED` semantic contexts atomically on write and idempotent replay.
+Evidence: `tests/test_commitment_scan_log.py`, `tests/test_management_indicators.py`, `tests/test_compute_say_do_extractor.py`, `tests/test_bha140_segment_scans.py`, `tests/test_kpi_atomic_admission.py`, `tests/test_kpi_batch_admission.py`, `tests/test_pipeline_kpi_persistence.py`, `tests/test_transcript_evidence_immutability.py`.
+
 ## Unified transcript & KPI admission pipeline — November 26, 2026
 
 Disposition: **existing offline CLI extended; no new dashboard route, panel, scheduler task, service, or database schema**.
@@ -7,7 +16,7 @@ Disposition: **existing offline CLI extended; no new dashboard route, panel, sch
 - `execution/ingest_transcripts.py --admit-retained [--transcript-id ID ...] [--ticker TICKER] [--dry-run]` exposes `pipeline.transcript_acquisition.admit_retained_transcripts`, which hash-verifies retained on-disk transcript bytes and persists trigger-validated `transcript_acquisition_receipts` (failing closed on missing, symlink-escaped, or mismatched artifacts).
 - `compute.say_do_extractor.extract_for_transcript` batches contiguous transcript segments into bounded `MAX_TRANSCRIPT_CHARS` chunks while retaining exact per-segment `segment_id` validation, verbatim `source_excerpt` binding, and per-segment `ObservedTranscriptSegment` receipts.
 - Deterministic KPI writers (`compute.metrics_engine.io.persist_attempt`, `table_extractors.generic_xbrl_capture.extract`) auto-admit structured `DERIVED` / `FMP_JSON_TABLE` / `SPREADSHEET_CELL` facts through `pipeline.kpi_atomic_admission.build_atomic_semantic_context` at persist time.
-Evidence: `tests/test_unified_admission_pipeline.py`, `tests/test_commitment_scan_receipts.py`, `tests/test_bha140_segment_scans.py`, `tests/test_compute_say_do_extractor.py`, `tests/test_transcript_acquisition_periods.py`, `tests/test_audit_transcript_evidence.py`, `tests/test_kpi_atomic_admission.py`, `tests/test_generic_xbrl_capture.py`.
+Evidence: `tests/test_unified_admission_pipeline.py`, `tests/test_commitment_scan_log.py`, `tests/test_bha140_segment_scans.py`, `tests/test_compute_say_do_extractor.py`, `tests/test_transcript_acquisition_periods.py`, `tests/test_audit_transcript_evidence.py`, `tests/test_kpi_atomic_admission.py`, `tests/test_generic_xbrl_capture.py`.
 
 ## Offline evidence externalization and DB compaction (PR 2B)
 

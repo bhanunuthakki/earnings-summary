@@ -49,7 +49,9 @@ from models.documents import SourceQualityTier, SourceType
 from models.facts import Currency, DerivedInputRef, DerivedRef, Unit
 from pipeline import locators
 from pipeline.confidence import score_confidence
-from pipeline.kpi_atomic_admission import build_atomic_semantic_context
+from pipeline.kpi_atomic_admission import (
+    ensure_deterministic_kpi_semantic_context,
+)
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
@@ -1147,21 +1149,34 @@ def persist_attempt(
             formula_id=formula_id,
             formula_version=formula.version,
         )
-        if new_id is not None:
-            persist_kpi_semantic_context(
-                conn,
-                kpi_fact_id=new_id,
-                context=build_atomic_semantic_context(
-                    metric_name=formula.formula_key,
-                    period_end=period_end.date(),
-                    value=result.value,
-                    unit=formula.unit,
-                    extracted_by="metrics_engine",
-                    locator=derived_loc,
+        target_fact_id = new_id
+        if target_fact_id is None:
+            existing_row = conn.execute(
+                "SELECT id FROM kpi_facts WHERE UPPER(ticker) = ? AND period_end = ? "
+                "AND fiscal_period_type = ? AND kpi_definition_id = ? AND source_doc_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (
+                    ticker.upper(),
+                    period_end,
+                    fiscal_period_type,
+                    kpi_def_id,
+                    anchor_doc_id,
                 ),
+            ).fetchone()
+            if existing_row is not None:
+                target_fact_id = int(existing_row[0])
+        if target_fact_id is not None:
+            ensure_deterministic_kpi_semantic_context(
+                conn,
+                kpi_fact_id=target_fact_id,
+                metric_name=formula.formula_key,
+                period_end=period_end.date(),
+                value=result.value,
+                unit=formula.unit,
+                extracted_by="metrics_engine",
+                locator=derived_loc,
                 reviewed_by="deterministic:metrics_engine",
                 knowledge_at=datetime.now(UTC),
-                kpi_definition_revision_id=None,
             )
         kpi_fact_id = new_id
     else:

@@ -28,6 +28,7 @@ from models.documents import SourceType
 from models.facts import Currency, FactLocator, Unit
 from models.kpis import DefinitionOrigin
 from pipeline import locators
+from pipeline.kpi_atomic_admission import ensure_deterministic_kpi_semantic_context
 from pipeline.kpi_persistence import (
     KpiValue,
     find_or_create_kpi_definition,
@@ -996,6 +997,35 @@ def persist_fpi_facts(
                 locator=loc_str,
                 source_excerpt=kpv.source_excerpt,
             )
+            target_kpi_id = new_kpi_id
+            if target_kpi_id is None:
+                existing_kpi = conn.execute(
+                    "SELECT id FROM kpi_facts WHERE UPPER(ticker) = ? AND period_end = ? "
+                    "AND fiscal_period_type = ? AND kpi_definition_id = ? AND source_doc_id = ? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (
+                        ticker.upper(),
+                        period_end,
+                        fiscal_period_type.upper(),
+                        kpi_def_id,
+                        doc_id,
+                    ),
+                ).fetchone()
+                if existing_kpi is not None:
+                    target_kpi_id = int(existing_kpi[0])
+            if target_kpi_id is not None:
+                ensure_deterministic_kpi_semantic_context(
+                    conn,
+                    kpi_fact_id=target_kpi_id,
+                    metric_name=kpv.name,
+                    period_end=period_end.date(),
+                    value=kpv.value,
+                    unit=kpv.unit,
+                    extracted_by="sec_fpi_ingest@1",
+                    locator=kpv.locator,
+                    source_excerpt=kpv.source_excerpt,
+                    reviewed_by="deterministic:sec_fpi_ingest@1",
+                )
             if new_kpi_id is not None or force:
                 kpi_inserted += 1
 

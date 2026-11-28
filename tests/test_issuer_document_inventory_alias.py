@@ -67,9 +67,6 @@ from provenance.source_coverage_reconcile import (
     reconcile_source_coverage,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-from tests.test_transcript_acquisition_receipt_migration import (
-    darwin_staging_double as darwin_staging_double,
-)
 from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
@@ -77,6 +74,77 @@ from transcripts.acquisition_semantics import (
     TranscriptAcquisitionRequest,
     TranscriptProvider,
 )
+from transcripts.immutable_staging import StagedTranscriptArtifact
+
+
+@pytest.fixture
+def darwin_staging_double(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use typed staged provenance while inventory tests run on Darwin."""
+    import sys
+
+    if sys.platform != "darwin":
+        return
+    from pipeline import transcript_acquisition as acquisition
+
+    payloads: dict[str, bytes] = {}
+
+    def stage(
+        source_path: Path,
+        private_root: Path,
+        *,
+        expected_sha256: str,
+        expected_size_bytes: int,
+        max_bytes: int,
+    ) -> StagedTranscriptArtifact:
+        del max_bytes
+        payload = source_path.read_bytes()
+        assert len(payload) == expected_size_bytes
+        assert hashlib.sha256(payload).hexdigest() == expected_sha256
+        source = source_path.resolve()
+        root = private_root.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        source_metadata = source.stat()
+        root_metadata = root.stat()
+        payloads[expected_sha256] = payload
+        return StagedTranscriptArtifact(
+            source_path=source,
+            source_device=int(source_metadata.st_dev),
+            source_inode=int(source_metadata.st_ino),
+            staging_root=root,
+            staging_root_device=int(root_metadata.st_dev),
+            staging_root_inode=int(root_metadata.st_ino),
+            staged_path=root / f"{expected_sha256}.transcript",
+            sha256=expected_sha256,
+            size_bytes=expected_size_bytes,
+        )
+
+    def read(
+        artifact: StagedTranscriptArtifact,
+        *,
+        trusted_staging_root: Path,
+        trusted_staging_root_device: int,
+        trusted_staging_root_inode: int,
+        expected_source_path: Path,
+        expected_source_device: int,
+        expected_source_inode: int,
+        expected_sha256: str,
+        expected_size_bytes: int,
+    ) -> bytes:
+        del (
+            trusted_staging_root,
+            trusted_staging_root_device,
+            trusted_staging_root_inode,
+            expected_source_path,
+            expected_source_device,
+            expected_source_inode,
+        )
+        assert artifact.sha256 == expected_sha256
+        assert artifact.size_bytes == expected_size_bytes
+        return payloads[artifact.sha256]
+
+    monkeypatch.setattr(acquisition, "stage_transcript_artifact", stage)
+    monkeypatch.setattr(acquisition, "read_staged_transcript", read)
+
 
 CLOCK = datetime(2026, 8, 6, tzinfo=UTC)
 URL = "https://investor.example.test/bkng/release.pdf"

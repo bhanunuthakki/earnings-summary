@@ -990,6 +990,8 @@ def _apply_kpis(
             primary_source=SourceType.IR_DOC,
             extracted_by="issuer_manifest_v1",
             origin=DefinitionOrigin.ANALYST,
+            auto_admit=True,
+            reviewed_by="deterministic:issuer_manifest_v1",
             values=values,
         ),
         commit=False,

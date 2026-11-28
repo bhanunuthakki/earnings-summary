@@ -281,13 +281,22 @@ def ingest_spreadsheet_kpis(
                         if isinstance(val, SpreadsheetCellRead) and val.locator is not None
                         else _NO_LOCATOR
                     ),
-                    semantic_context=(
-                        unclassified_kpi_context(
-                            metric_name_as_reported=val.raw_label or val.spec.kpi_name,
-                            reported_period_end=period_end.date(),
-                        )
+                    metric_name_as_reported=(
+                        val.raw_label or val.spec.kpi_name
                         if isinstance(val, SpreadsheetCellRead)
                         else None
+                    ),
+                    semantic_context=(
+                        None
+                        if isinstance(val, SpreadsheetCellRead) and val.locator is not None
+                        else unclassified_kpi_context(
+                            metric_name_as_reported=(
+                                val.raw_label or val.spec.kpi_name
+                                if isinstance(val, SpreadsheetCellRead)
+                                else name
+                            ),
+                            reported_period_end=period_end.date(),
+                        )
                     ),
                 )
                 for name, val in kpis.items()
@@ -300,6 +309,8 @@ def ingest_spreadsheet_kpis(
                 primary_source=SourceType.IR_DOC,
                 model_name=None,
                 extracted_by="ir_spreadsheet",
+                auto_admit=True,
+                reviewed_by="deterministic:ir_spreadsheet",
                 origins=origins,
                 values=values,
             )

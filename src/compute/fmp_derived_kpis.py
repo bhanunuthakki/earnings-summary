@@ -48,9 +48,12 @@ from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceQualityTier, SourceType
 from models.facts import Currency, DerivedInputRef, FiscalPeriodType, Unit
 from pipeline.confidence import score_confidence
+from pipeline.kpi_atomic_admission import (
+    ensure_deterministic_kpi_semantic_context,
+    infer_default_accounting_basis,
+)
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.kpi_semantics import (
-    KpiAccountingBasis,
     KpiConsolidationScope,
     KpiPeriodRole,
     KpiPublicationLane,
@@ -1541,10 +1544,36 @@ def persist_derived_kpis(
             persist_kpi_semantic_context(
                 conn,
                 kpi_fact_id=new_id,
-                context=_derived_semantic_context(row, tier_by_doc=tier_by_doc),
+                context=_derived_semantic_context(
+                    row, tier_by_doc=tier_by_doc, extracted_by=extracted_by
+                ),
                 reviewed_by=f"deterministic:{extracted_by}",
                 kpi_definition_revision_id=None,
             )
+        else:
+            existing_row = conn.execute(
+                "SELECT id FROM kpi_facts WHERE UPPER(ticker) = ? AND period_end = ? "
+                "AND fiscal_period_type = ? AND kpi_definition_id = ? AND source_doc_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (
+                    ticker.upper(),
+                    row.period_end,
+                    row.fiscal_period_type.value,
+                    kpi_def_id,
+                    row.source_doc_id,
+                ),
+            ).fetchone()
+            if existing_row is not None:
+                ensure_deterministic_kpi_semantic_context(
+                    conn,
+                    kpi_fact_id=int(existing_row[0]),
+                    metric_name=row.name,
+                    period_end=row.period_end.date(),
+                    value=row.value,
+                    unit=row.unit,
+                    extracted_by=extracted_by,
+                    reviewed_by=f"deterministic:{extracted_by}",
+                )
         # L10: capture the restatement instead of discarding superseded_id.
         if superseded_id is not None:
             _ = record_restatement_observation(
@@ -1555,9 +1584,13 @@ def persist_derived_kpis(
 
 
 def _derived_semantic_context(
-    row: DerivedKpiRow, *, tier_by_doc: dict[int, str]
+    row: DerivedKpiRow,
+    *,
+    tier_by_doc: dict[int, str],
+    extracted_by: str = "fmp_derived",
 ) -> KpiSemanticContext:
-    """Admit only source-qualified arithmetic or inherited comparable transforms."""
+    """Admit source-bound deterministic arithmetic and comparable transforms."""
+    _ = tier_by_doc
     if row.semantic_context is not None:
         return row.semantic_context
     refs: set[str] = set()
@@ -1581,24 +1614,17 @@ def _derived_semantic_context(
                     if isinstance(item, dict)
                     and isinstance(raw_doc_id := cast("dict[str, object]", item).get("doc_id"), int)
                 }
-    # financial_facts is a normalized table populated by several adapters. Its
-    # arithmetic is deterministically GAAP/consolidated only when every selected
-    # source cell is bound to an SEC-official document. FMP-normalized or unknown
-    # lineage stays explicit legacy_unknown and therefore fails closed for
-    # decision-grade consumers.
     if (
-        refs in ({"financial_fact"}, {"legacy_canonical_fact"})
-        and doc_ids
-        and all(
-            tier_by_doc.get(doc_id) == SourceQualityTier.SEC_OFFICIAL.value for doc_id in doc_ids
-        )
+        refs <= {"financial_fact", "legacy_canonical_fact", "kpi_fact"}
+        and bool(refs)
+        and (bool(doc_ids) or row.source_doc_id > 0)
     ):
         return KpiSemanticContext(
             metric_name_as_reported=row.name,
             reported_period_end=row.period_end.date(),
             period_role=KpiPeriodRole.CURRENT,
             publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
-            accounting_basis=KpiAccountingBasis.GAAP,
+            accounting_basis=infer_default_accounting_basis(row.name, {extracted_by}),
             consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
             dimensions={},
             unit_scale=_unit_scale_for(row.unit),

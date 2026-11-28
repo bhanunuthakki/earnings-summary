@@ -252,7 +252,10 @@ class KpiExtractionManifest(BaseModel):
     # manifest-level `origin` at ANALYST, so persist_manifest's capture-mode
     # name-collapse is a no-op and the already-canonical names are stored verbatim).
     origins: dict[str, DefinitionOrigin] = Field(default_factory=dict)
-    auto_admit: bool = False
+    # Default (None) auto-admits deterministic extractors and excerpted/qualified
+    # extractions automatically, while keeping unexcerpted LLM manifests in
+    # legacy_unknown. Explicit True enforces strict atomic admission; False opts out.
+    auto_admit: bool | None = None
     reviewed_by: str = Field(default="pipeline:atomic_ingest", min_length=1, max_length=128)
     metric_natures: dict[str, KpiMetricNature] = Field(default_factory=dict)
     comparative_overlaps: dict[str, ComparativeOverlapCandidate] = {}
@@ -949,6 +952,7 @@ def persist_manifest(
     # Local import: pipeline.locators imports record_validation_issue FROM
     # this module, so a module-level `from pipeline import locators` here
     # would be circular. By call time both modules are fully loaded.
+    from pipeline.kpi_atomic_admission import DETERMINISTIC_ADMITTABLE_EXTRACTORS
     from pipeline.kpi_comparability_admission import (
         admit_recast_comparative_bridge,
         admit_split_scale_bridge,
@@ -978,8 +982,23 @@ def persist_manifest(
             else manifest.metric_natures.get(kpi.name, KpiMetricNature.REPORTED_SCALAR)
         )
         excerpt = normalize_source_excerpt(kpi.source_excerpt)
-        if (
+        effective_auto_admit = (
             manifest.auto_admit
+            if manifest.auto_admit is not None
+            else (
+                (
+                    extracted_by in DETERMINISTIC_ADMITTABLE_EXTRACTORS
+                    and isinstance(kpi.locator, FactLocator)
+                )
+                or (
+                    effective_nature is not KpiMetricNature.REPORTED_SCALAR
+                    and (excerpt is not None or kpi.basis_note is not None)
+                )
+                or (isinstance(kpi.locator, FactLocator) and excerpt is not None)
+            )
+        )
+        if (
+            effective_auto_admit
             and kpi.semantic_context is None
             and effective_nature is KpiMetricNature.INFERRED_EXTRAPOLATED
             and excerpt is None
@@ -1007,7 +1026,7 @@ def persist_manifest(
                         unit=kpi.unit,
                         unit_scale=pre_context.unit_scale,
                     )
-        elif manifest.auto_admit:
+        elif effective_auto_admit:
             if (
                 kpi.unit is Unit.COUNT
                 and kpi.unit_scale is not None
