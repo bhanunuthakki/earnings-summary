@@ -3377,3 +3377,15 @@ preflights. The 6 retired offline CLIs (`audit_ask_retrieval_cutover.py`,
 `register_archive_generation.py`) and their 7 backing modules are removed. Active Ask
 (`grounded` and `legacy` modes), `/source/version/<id>`, and all scheduled jobs remain
 unchanged.
+
+## Wave 3 guarded SEC-attachment compaction flag (2026-11-28)
+
+Disposition: **additive opt-in flag on existing offline compaction CLI; no new schedule or UI action**.
+`execution/compact_evidence_and_coverage.py` adds `--prune-uncaptured-sec-attachments`
+(implemented in `src/provenance/evidence_compaction.py`). Under the existing single-writer
+`JobLock` and guarded append-only trigger maintenance transaction, it prunes uncaptured
+`sec_financial_report`, `sec_supporting_attachment`, and `sec_exhibit` rows from
+`expected_documents` and their dependent `source_coverage_assessments`,
+`expected_document_obligation_bindings`, and `expected_document_lifecycle_revisions` chains
+while preserving all primary filings, IR documents, captured/extracted/quarantined/failed
+rows, and external FK references. Dry-run remains the default.

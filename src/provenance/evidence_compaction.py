@@ -181,6 +181,7 @@ class CompactionOptions:
     batch_size: int = DEFAULT_BATCH_SIZE
     archive_substantive_nodes: bool = False
     prune_index_member_coverage: bool = False
+    prune_uncaptured_sec_attachments: bool = False
     prune_inactive_filing_sections: bool = False
     prune_unreferenced_legacy_matches: bool = False
     vacuum: bool = False
@@ -619,14 +620,8 @@ def _index_member_only_issuers(conn: sqlite3.Connection) -> set[str]:
     }
 
 
-def _select_prunable_expected_documents(conn: sqlite3.Connection) -> list[str]:
+def _protected_expected_document_ids(conn: sqlite3.Connection) -> set[str]:
     tables = _existing_tables(conn)
-    if "expected_documents" not in tables:
-        return []
-    eligible_issuers = _index_member_only_issuers(conn)
-    if not eligible_issuers:
-        return []
-
     known_expected_doc_refs = {
         ("source_coverage_assessments", "expected_document_id"),
         ("expected_document_obligation_bindings", "expected_document_id"),
@@ -651,7 +646,18 @@ def _select_prunable_expected_documents(conn: sqlite3.Connection) -> list[str]:
                 "WHERE expected_document_id IS NOT NULL"
             ).fetchall()
         }
+    return protected_ids
 
+
+def _select_prunable_expected_documents(conn: sqlite3.Connection) -> list[str]:
+    tables = _existing_tables(conn)
+    if "expected_documents" not in tables:
+        return []
+    eligible_issuers = _index_member_only_issuers(conn)
+    if not eligible_issuers:
+        return []
+
+    protected_ids = _protected_expected_document_ids(conn)
     return [
         str(row[0])
         for row in conn.execute(
@@ -659,6 +665,48 @@ def _select_prunable_expected_documents(conn: sqlite3.Connection) -> list[str]:
             "ORDER BY expected_document_id"
         ).fetchall()
         if str(row[1]) in eligible_issuers and str(row[0]) not in protected_ids
+    ]
+
+
+_PRUNABLE_UNCAPTURED_SEC_ATTACHMENT_TYPES: tuple[str, ...] = (
+    "sec_financial_report",
+    "sec_supporting_attachment",
+    "sec_exhibit",
+)
+
+
+def _select_prunable_uncaptured_sec_attachments(conn: sqlite3.Connection) -> list[str]:
+    """Select uncaptured SEC attachment/report expected_documents rows safe to prune.
+
+    Strictly preserves:
+    - All primary filings (``filing``) and IR documents (``ir_document``)
+    - Any attachment that has ever been captured, extracted, quarantined, or failed fetch,
+      or that carries a linked ``document_version_id``
+    - Any row referenced by ``latest_governed_document_entries`` or unregistered FKs
+    """
+    tables = _existing_tables(conn)
+    if "expected_documents" not in tables:
+        return []
+    protected_ids = _protected_expected_document_ids(conn)
+    if "source_coverage_assessments" in tables:
+        protected_ids.update(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT expected_document_id FROM source_coverage_assessments "
+                "WHERE expected_document_id IS NOT NULL "
+                "AND (document_version_id IS NOT NULL "
+                "OR coverage_status NOT IN ('available', 'authority_unavailable'))"
+            ).fetchall()
+        )
+    return [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT expected_document_id FROM expected_documents "
+            "WHERE source_kind = 'sec_filing' "
+            "AND document_type IN ('sec_financial_report', 'sec_supporting_attachment', 'sec_exhibit') "
+            "ORDER BY expected_document_id"
+        ).fetchall()
+        if str(row[0]) not in protected_ids
     ]
 
 
@@ -743,14 +791,15 @@ def _delete_chain_leaf_to_root(
     return total_deleted
 
 
-def _run_step_b_coverage(
-    conn: sqlite3.Connection, options: CompactionOptions, log_event: EventLogger
+def _prune_expected_document_ids(
+    conn: sqlite3.Connection,
+    expected_doc_ids: Sequence[str],
+    options: CompactionOptions,
+    *,
+    event_name: str,
+    log_event: EventLogger,
 ) -> dict[str, object]:
-    if not options.prune_index_member_coverage:
-        return {"enabled": False}
-
     tables = _existing_tables(conn)
-    expected_doc_ids = _select_prunable_expected_documents(conn)
     expected_doc_set = set(expected_doc_ids)
 
     assessment_ids, assessment_parents = _collect_chain_rows(
@@ -824,13 +873,43 @@ def _run_step_b_coverage(
     result["deleted_lifecycle_revisions"] = del_lifecycle
     result["deleted_expected_documents"] = del_expected
     log_event(
-        "compact_index_member_coverage_pruned",
+        event_name,
         expected_documents=del_expected,
         source_coverage_assessments=del_assessments,
         obligation_bindings=del_bindings,
         lifecycle_revisions=del_lifecycle,
     )
     return result
+
+
+def _run_step_b_coverage(
+    conn: sqlite3.Connection, options: CompactionOptions, log_event: EventLogger
+) -> dict[str, object]:
+    if not options.prune_index_member_coverage:
+        return {"enabled": False}
+    expected_doc_ids = _select_prunable_expected_documents(conn)
+    return _prune_expected_document_ids(
+        conn,
+        expected_doc_ids,
+        options,
+        event_name="compact_index_member_coverage_pruned",
+        log_event=log_event,
+    )
+
+
+def _run_step_b_uncaptured_sec_attachments(
+    conn: sqlite3.Connection, options: CompactionOptions, log_event: EventLogger
+) -> dict[str, object]:
+    if not options.prune_uncaptured_sec_attachments:
+        return {"enabled": False}
+    expected_doc_ids = _select_prunable_uncaptured_sec_attachments(conn)
+    return _prune_expected_document_ids(
+        conn,
+        expected_doc_ids,
+        options,
+        event_name="compact_uncaptured_sec_attachments_pruned",
+        log_event=log_event,
+    )
 
 
 def _run_step_b_filing_sections(
@@ -1087,6 +1166,9 @@ def run_compaction(
             conn.execute("PRAGMA cache_size = -262144")
             step_a = _run_step_a(conn, options, log_event)
             step_b_coverage = _run_step_b_coverage(conn, options, log_event)
+            step_b_sec_attachments = _run_step_b_uncaptured_sec_attachments(
+                conn, options, log_event
+            )
             step_b_sections = _run_step_b_filing_sections(conn, options, log_event)
             step_c = _run_step_c_legacy_matches(conn, options, log_event)
             step_d = _run_step_d_vacuum(
@@ -1103,6 +1185,7 @@ def run_compaction(
         "batch_size": options.batch_size,
         "step_a_evidence_nodes": step_a,
         "step_b_index_member_coverage": step_b_coverage,
+        "step_b_uncaptured_sec_attachments": step_b_sec_attachments,
         "step_b_filing_sections": step_b_sections,
         "step_c_legacy_matches": step_c,
         "step_d_vacuum": step_d,
